@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+dist/
+artifacts/
+output/
+__pycache__/
+.vs/
+*.user
+analysis/reference-runtime/
+analysis/binary-evidence.json
+src/CaptureReplica/Assets/CaptureStudio.ico
+src/CaptureReplica/Recorder/.verification/
+.env
+.env.*
+!.env.example
