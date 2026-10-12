@@ -12,7 +12,11 @@ Windows 便携包包含 .NET Runtime 与 Windows Desktop Runtime。构建脚本�
 
 ## FFmpeg
 
-录屏与视频裁剪调用用户另行安装的 [FFmpeg](https://ffmpeg.org/)。本仓库与官方便携包不包含 FFmpeg 二进制。不同 FFmpeg 构建启用的组件及许可可能不同，分发者应查阅所用构建的 [许可说明](https://ffmpeg.org/legal.html)。
+可选的扩展录音、视频裁剪与转码调用用户另行安装的 [FFmpeg](https://ffmpeg.org/)。日常无声录屏、暂停/继续和 MP4 保存不依赖 FFmpeg。本仓库与官方便携包不包含 FFmpeg 二进制。不同 FFmpeg 构建启用的组件及许可可能不同，分发者应查阅所用构建的 [许可说明](https://ffmpeg.org/legal.html)。
+
+## Windows 媒体组件
+
+无声录屏通过 Windows Media Foundation 使用系统的 H.264 编码与 MP4 封装能力。相关媒体组件由 Windows 提供，Framelet 不另行分发系统编解码器；运行系统需要具备相应媒体功能。
 
 ## 品牌素材与字体
 

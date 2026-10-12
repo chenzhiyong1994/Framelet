@@ -6,7 +6,7 @@ public sealed class VideoTrimForm : Form
 {
     private readonly TextBox filePath = new() { ReadOnly = true, BorderStyle = BorderStyle.FixedSingle, Dock = DockStyle.Fill };
     private readonly Button browse = new() { Text = "打开视频", Width = 100, Height = 30 };
-    private readonly Button engineSettings = new() { Text = "引擎设置…", AutoSize = true };
+    private readonly Button engineSettings = new() { Text = "剪辑组件…", AutoSize = true };
     private readonly PictureBox preview = new() { SizeMode = PictureBoxSizeMode.Zoom, Dock = DockStyle.Fill };
     private readonly TrackBar timeline = new() { Minimum = 0, Maximum = 1000, TickStyle = TickStyle.None, Dock = DockStyle.Fill, Enabled = false };
     private readonly Label cursorTime = new() { Text = "00:00.00 / 00:00.00", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight };
@@ -83,7 +83,7 @@ public sealed class VideoTrimForm : Form
         inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
         filePath.Margin = new Padding(0, 7, 12, 8);
         filePath.BackColor = BrandTheme.Surface;
-        filePath.PlaceholderText = "打开要剪辑的视频文件";
+        filePath.PlaceholderText = "打开要剪辑的视频文件（此扩展功能使用 FFmpeg）";
         browse.Size = new Size(132, 36);
         browse.Margin = new Padding(0, 1, 0, 5);
         BrandTheme.StyleButton(browse);

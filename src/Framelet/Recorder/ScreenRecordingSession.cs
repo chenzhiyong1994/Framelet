@@ -128,8 +128,50 @@ public static class FFmpegLocator
     }
 }
 
-/// <summary>Records independent segments so a pause never creates blank time in the final movie.</summary>
 public sealed class ScreenRecordingSession : IAsyncDisposable
+{
+    private readonly IRecordingSessionBackend backend;
+    public bool UsesNativeBackend => backend is NativeRecordingSession;
+    public bool CanResume => backend.CanResume;
+    public RecordingState State => backend.State;
+    public TimeSpan RecordedTime => backend.RecordedTime;
+    public string RecoveryDirectory => backend.RecoveryDirectory;
+    public bool EncoderExited => backend.EncoderExited;
+
+    public ScreenRecordingSession(RecordingOptions options)
+    {
+        backend = string.IsNullOrWhiteSpace(options.AudioDevice)
+            ? new NativeRecordingSession(options)
+            : new FFmpegRecordingSession(options);
+    }
+
+    internal ScreenRecordingSession(RecordingOptions options, Action<Bitmap, long> renderFrame)
+        => backend = new NativeRecordingSession(options, renderFrame);
+
+    public Task StartAsync() => backend.StartAsync();
+    public Task PauseAsync() => backend.PauseAsync();
+    public Task ResumeAsync() => backend.ResumeAsync();
+    public Task<string> FinishAsync(string outputPath) => backend.FinishAsync(outputPath);
+    public ValueTask DisposeAsync() => backend.DisposeAsync();
+    public static Task<string[]> RunEncodingSelfTestAsync(string outputDirectory, string? ffmpegPath = null)
+        => FFmpegRecordingSession.RunEncodingSelfTestAsync(outputDirectory, ffmpegPath);
+}
+
+internal interface IRecordingSessionBackend : IAsyncDisposable
+{
+    RecordingState State { get; }
+    TimeSpan RecordedTime { get; }
+    string RecoveryDirectory { get; }
+    bool EncoderExited { get; }
+    bool CanResume { get; }
+    Task StartAsync();
+    Task PauseAsync();
+    Task ResumeAsync();
+    Task<string> FinishAsync(string outputPath);
+}
+
+/// <summary>Optional audio backend. Silent screen recording uses Windows media services instead.</summary>
+internal sealed class FFmpegRecordingSession : IRecordingSessionBackend
 {
     private readonly RecordingOptions options;
     private readonly string ffmpeg;
@@ -147,10 +189,11 @@ public sealed class ScreenRecordingSession : IAsyncDisposable
     public TimeSpan RecordedTime => activeTime.Elapsed;
     public string RecoveryDirectory { get; }
     public bool EncoderExited => State == RecordingState.Recording && process is { HasExited: true };
+    public bool CanResume => State == RecordingState.Paused;
 
-    public ScreenRecordingSession(RecordingOptions options) : this(options, false) { }
+    public FFmpegRecordingSession(RecordingOptions options) : this(options, false) { }
 
-    private ScreenRecordingSession(RecordingOptions options, bool synthetic)
+    private FFmpegRecordingSession(RecordingOptions options, bool synthetic)
     {
         if (options.Bounds.Width < 2 || options.Bounds.Height < 2) throw new ArgumentException("录像区域必须至少为 2 × 2 像素。");
         if (options.FramesPerSecond is < 1 or > 60) throw new ArgumentOutOfRangeException(nameof(options), "帧率必须在 1 到 60 之间。");
@@ -348,7 +391,7 @@ public sealed class ScreenRecordingSession : IAsyncDisposable
         var outputs = new List<string>();
         foreach (var format in new[] { "mp4", "wmv" })
         {
-            await using var session = new ScreenRecordingSession(new RecordingOptions(new Rectangle(0, 0, 320, 240), 10, false, null, ffmpegPath), true);
+            await using var session = new FFmpegRecordingSession(new RecordingOptions(new Rectangle(0, 0, 320, 240), 10, false, null, ffmpegPath), true);
             await session.StartAsync();
             await Task.Delay(650);
             await session.PauseAsync();

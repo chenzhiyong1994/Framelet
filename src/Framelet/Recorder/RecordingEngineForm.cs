@@ -8,7 +8,7 @@ internal sealed class RecordingEngineForm : Form
     private readonly Label state = new() { AutoSize = true, Dock = DockStyle.Fill, ForeColor = BrandTheme.Muted, Margin = new Padding(0, 8, 0, 8) };
     private readonly TextBox location = new() { ReadOnly = true, Multiline = true, Height = 56, Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle };
     private readonly Button detect = new() { Text = "重新自动检测", AutoSize = true };
-    private readonly Button choose = new() { Text = "选择已安装的引擎…", AutoSize = true };
+    private readonly Button choose = new() { Text = "选择已安装的 FFmpeg…", AutoSize = true };
     private readonly Button download = new() { Text = "打开 FFmpeg 下载页", AutoSize = true };
     private readonly Button done = new() { Text = "关闭", AutoSize = true };
     private bool checking;
@@ -21,8 +21,8 @@ internal sealed class RecordingEngineForm : Form
         BrandTheme.Apply(this);
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
-        Text = BrandTheme.Name + " · 录屏引擎";
-        ClientSize = new Size(600, 350);
+        Text = BrandTheme.Name + " · 扩展功能设置";
+        ClientSize = new Size(620, 390);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -32,7 +32,7 @@ internal sealed class RecordingEngineForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var explanation = new Label
         {
-            Text = "Framelet 使用 FFmpeg 将屏幕画面保存为视频，并完成视频剪辑。\n已安装的引擎会自动识别，无需每次选择；当前便携包未附带引擎。",
+            Text = "无声录屏与 MP4 保存使用 Windows 自带媒体能力，无需额外配置。\n扩展录音、视频剪辑与 WMV 转换使用可选的 FFmpeg；便携包未附带它。\n录音支持本机 DirectShow 设备；系统声音需要可用的回环或立体声混音设备。",
             AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8)
         };
         root.Controls.Add(explanation, 0, 0);
@@ -57,7 +57,7 @@ internal sealed class RecordingEngineForm : Form
         detect.Click += async (_, _) => await DetectAsync(null, true);
         choose.Click += async (_, _) =>
         {
-            using var dialog = new OpenFileDialog { Title = "选择 FFmpeg 引擎", Filter = "FFmpeg 引擎 (ffmpeg.exe)|ffmpeg.exe", CheckFileExists = true };
+            using var dialog = new OpenFileDialog { Title = "选择扩展功能使用的 FFmpeg", Filter = "FFmpeg (ffmpeg.exe)|ffmpeg.exe", CheckFileExists = true };
             if (dialog.ShowDialog(this) == DialogResult.OK) await DetectAsync(dialog.FileName, true);
         };
         download.Click += (_, _) =>
@@ -77,7 +77,7 @@ internal sealed class RecordingEngineForm : Form
         EngineReady = false;
         ResolvedEnginePath = null;
         detect.Enabled = choose.Enabled = done.Enabled = false;
-        state.Text = "正在检测录屏引擎…";
+        state.Text = "正在检测扩展功能所需的 FFmpeg…";
         try
         {
             var resolved = await FFmpegLocator.CheckAvailableAsync(configuredPath);
@@ -89,7 +89,7 @@ internal sealed class RecordingEngineForm : Form
             }
             EngineReady = true;
             ResolvedEnginePath = resolved;
-            state.Text = "引擎已就绪 · " + (string.IsNullOrWhiteSpace(configuredPath) ? "自动识别，无需手动选择" : "已记住选定的引擎");
+            state.Text = "扩展功能已就绪 · " + (string.IsNullOrWhiteSpace(configuredPath) ? "自动识别，无需手动选择" : "已记住选定的 FFmpeg");
             state.ForeColor = BrandTheme.Accent;
             location.Text = resolved;
             done.Text = "完成";

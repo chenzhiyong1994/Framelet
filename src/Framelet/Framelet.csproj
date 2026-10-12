@@ -10,7 +10,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/Framelet.ico</ApplicationIcon>
     <Product>帧简 Framelet</Product>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <PathMap>$(MSBuildProjectDirectory)=/_/src/Framelet</PathMap>
     <DeterministicSourcePaths>true</DeterministicSourcePaths>
     <Description>Framelet — capture, annotate and share everyday moments</Description>
