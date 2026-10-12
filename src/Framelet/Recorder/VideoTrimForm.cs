@@ -6,6 +6,7 @@ public sealed class VideoTrimForm : Form
 {
     private readonly TextBox filePath = new() { ReadOnly = true, BorderStyle = BorderStyle.FixedSingle, Dock = DockStyle.Fill };
     private readonly Button browse = new() { Text = "打开视频", Width = 100, Height = 30 };
+    private readonly Button engineSettings = new() { Text = "引擎设置…", AutoSize = true };
     private readonly PictureBox preview = new() { SizeMode = PictureBoxSizeMode.Zoom, Dock = DockStyle.Fill };
     private readonly TrackBar timeline = new() { Minimum = 0, Maximum = 1000, TickStyle = TickStyle.None, Dock = DockStyle.Fill, Enabled = false };
     private readonly Label cursorTime = new() { Text = "00:00.00 / 00:00.00", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight };
@@ -23,7 +24,8 @@ public sealed class VideoTrimForm : Form
     private readonly ProgressBar progress = new() { Minimum = 0, Maximum = 1000, Height = 8, Dock = DockStyle.Fill };
     private readonly Label status = new() { Text = "就绪", AutoEllipsis = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
     private readonly System.Windows.Forms.Timer previewTimer = new() { Interval = 180 };
-    private readonly string? configuredFFmpeg;
+    private string? configuredFFmpeg;
+    private readonly RecorderPreferences enginePreferences;
     private readonly string? initialPath;
     private CancellationTokenSource? previewCancellation;
     private CancellationTokenSource? operationCancellation;
@@ -35,14 +37,23 @@ public sealed class VideoTrimForm : Form
     private Image? brandMark;
 
     public VideoTrimForm(string? inputPath = null, string? ffmpegPath = null)
+        : this(inputPath, RecorderPreferences.Load(), ffmpegPath) { }
+
+    internal VideoTrimForm(string? inputPath, RecorderPreferences preferences)
+        : this(inputPath, preferences, null) { }
+
+    private VideoTrimForm(string? inputPath, RecorderPreferences preferences, string? ffmpegPath)
     {
         initialPath = inputPath;
-        configuredFFmpeg = ffmpegPath ?? RecorderPreferences.Load().FFmpegPath;
+        enginePreferences = preferences;
+        if (ffmpegPath is not null) enginePreferences.FFmpegPath = ffmpegPath;
+        configuredFFmpeg = enginePreferences.FFmpegPath;
         BrandTheme.Apply(this);
         Text = BrandTheme.Name + " · 视频剪辑";
         ClientSize = new Size(1020, 680);
         MinimumSize = new Size(916, 680);
         StartPosition = FormStartPosition.CenterParent;
+        AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20, 16, 20, 14), ColumnCount = 1, RowCount = 9 };
@@ -61,6 +72,10 @@ public sealed class VideoTrimForm : Form
         heading.Controls.Add(new PictureBox { Image = brandMark, SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(2, 12, 42, 42) });
         heading.Controls.Add(new Label { Text = BrandTheme.Wordmark, Font = new Font("Segoe UI", 9F, FontStyle.Bold), ForeColor = BrandTheme.Accent, Bounds = new Rectangle(58, 2, 220, 24) });
         heading.Controls.Add(new Label { Text = "留下精彩的那一段", Font = new Font(Font.FontFamily, 19F, FontStyle.Bold), Bounds = new Rectangle(56, 29, 620, 38) });
+        BrandTheme.StyleButton(engineSettings);
+        engineSettings.SetBounds(830, 23, 140, 36);
+        engineSettings.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        heading.Controls.Add(engineSettings);
         root.Controls.Add(heading, 0, 0);
 
         var inputRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
@@ -144,6 +159,13 @@ public sealed class VideoTrimForm : Form
         Controls.Add(root);
 
         browse.Click += async (_, _) => await ChooseInputAsync();
+        engineSettings.Click += (_, _) =>
+        {
+            using var dialog = new RecordingEngineForm(enginePreferences);
+            dialog.ShowDialog(this);
+            configuredFFmpeg = enginePreferences.FFmpegPath;
+            if (dialog.EngineReady) status.Text = "视频引擎已就绪。";
+        };
         timeline.ValueChanged += (_, _) =>
         {
             RefreshCursorTime();
@@ -191,6 +213,7 @@ public sealed class VideoTrimForm : Form
     {
         var ready = metadata is not null && !operationRunning;
         browse.Enabled = !operationRunning;
+        engineSettings.Enabled = !operationRunning;
         timeline.Enabled = ready;
         start.Enabled = end.Enabled = startHere.Enabled = endHere.Enabled = reset.Enabled = format.Enabled = ready;
         export.Enabled = ready && end.Value > start.Value;
@@ -209,12 +232,20 @@ public sealed class VideoTrimForm : Form
         metadata = null;
         operationCancellation?.Cancel();
         operationCancellation?.Dispose();
-        operationCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        operationCancellation = new CancellationTokenSource();
         previewCancellation?.Cancel();
         SetEnabledState();
         status.Text = "正在读取视频信息…";
         try
         {
+            if (!await EnsureEngineAsync())
+            {
+                if (!IsDisposed) status.Text = "视频引擎尚未准备好，请打开“引擎设置”。";
+                return;
+            }
+            if (IsDisposed) return;
+            // The time spent choosing an engine is user interaction, not a stalled video read.
+            operationCancellation.CancelAfter(TimeSpan.FromSeconds(30));
             var info = await VideoTrimService.InspectAsync(path, configuredFFmpeg, operationCancellation.Token);
             if (IsDisposed) return;
             metadata = info;
@@ -238,6 +269,24 @@ public sealed class VideoTrimForm : Form
             operationRunning = false;
             initializingValues = false;
             if (!IsDisposed) RefreshSelection();
+        }
+    }
+
+    private async Task<bool> EnsureEngineAsync()
+    {
+        try
+        {
+            configuredFFmpeg = await FFmpegLocator.CheckAvailableAsync(configuredFFmpeg);
+            return true;
+        }
+        catch (Exception)
+        {
+            if (IsDisposed) return false;
+            using var dialog = new RecordingEngineForm(enginePreferences);
+            dialog.ShowDialog(this);
+            if (!dialog.EngineReady) return false;
+            configuredFFmpeg = dialog.ResolvedEnginePath;
+            return true;
         }
     }
 

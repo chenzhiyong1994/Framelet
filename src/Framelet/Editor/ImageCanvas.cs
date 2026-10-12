@@ -5,9 +5,13 @@ namespace Framelet;
 
 public static class EditorViewport
 {
-    public static PointF Origin(Size viewport, Size image, float zoom, Point scroll, bool centerVertically) =>
-        new(scroll.X + Math.Max(18, (viewport.Width - image.Width * zoom) / 2),
+    public static PointF Origin(Size viewport, Size image, float zoom, Point scroll, bool centerVertically)
+    {
+        var origin = new PointF(scroll.X + Math.Max(18, (viewport.Width - image.Width * zoom) / 2),
             scroll.Y + (centerVertically ? Math.Max(18, (viewport.Height - image.Height * zoom) / 2) : 18));
+        // A physical pixel must map to exactly one source pixel at actual size.
+        return zoom == 1 ? new PointF(MathF.Floor(origin.X), MathF.Floor(origin.Y)) : origin;
+    }
 
     public static PointF ToImage(PointF clientPoint, PointF origin, float zoom) =>
         new((clientPoint.X - origin.X) / zoom, (clientPoint.Y - origin.Y) / zoom);
@@ -138,9 +142,14 @@ internal sealed class ImageCanvas : ScrollableControl
             e.Graphics.FillRectangle(shadow, display.X + 3, display.Y + 4, display.Width, display.Height);
         using (var checker = new HatchBrush(HatchStyle.LargeCheckerBoard, Color.FromArgb(230, 230, 230), Color.White))
             e.Graphics.FillRectangle(checker, display);
-        e.Graphics.InterpolationMode = zoom >= 2 ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
-        e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        e.Graphics.DrawImage(image, display, new RectangleF(0, 0, image.Width, image.Height), GraphicsUnit.Pixel);
+        if (zoom == 1)
+            e.Graphics.DrawImageUnscaled(image, (int)origin.X, (int)origin.Y);
+        else
+        {
+            e.Graphics.InterpolationMode = zoom >= 2 ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
+            e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            e.Graphics.DrawImage(image, display, new RectangleF(0, 0, image.Width, image.Height), GraphicsUnit.Pixel);
+        }
         using (var outline = new Pen(Color.FromArgb(140, 140, 140)))
             e.Graphics.DrawRectangle(outline, display.X - 1, display.Y - 1, display.Width + 1, display.Height + 1);
 

@@ -9,6 +9,73 @@ public static class EditorSelfTests
     {
         Directory.CreateDirectory(directory);
         var results = new List<string>();
+        Check("editor and annotation action labels fit at 100, 150 and 200 percent layout scales", () =>
+        {
+            using var image = new Bitmap(80, 60);
+            foreach (float scale in new[] { 1f, 1.5f, 2f })
+            {
+                using var editor = new EditorForm(image);
+                using var draw = new DrawForm(image);
+                foreach (var window in new Form[] { editor, draw })
+                {
+                    // Exercise proportional control and text sizing without changing the user's monitor settings.
+                    // This is a layout check; real per-monitor DPI transitions still require a display test.
+                    ScaleLayout(window, scale);
+                    LayoutTree(window);
+                    foreach (var button in Descendants(window).OfType<Button>().Where(button => button.Text.Length > 0))
+                    {
+                        var preferred = button.GetPreferredSize(Size.Empty);
+                        Assert(button.Width >= preferred.Width && button.Height >= preferred.Height,
+                            $"{window.Text}: {button.Text} needs {preferred}, has {button.Size} at {scale:P0} layout scale");
+                        if (button.Parent is ScrollableControl { AutoScroll: false } parent)
+                            Assert(parent.ClientRectangle.Contains(button.Bounds), $"{button.Text} is clipped by its parent at {scale:P0} layout scale");
+                    }
+                    foreach (var strip in Descendants(window).OfType<ToolStrip>())
+                        foreach (var item in strip.Items.OfType<ToolStripButton>())
+                        {
+                            var preferred = item.GetPreferredSize(Size.Empty);
+                            Assert(item.Width >= preferred.Width && item.Height >= preferred.Height,
+                                $"{item.Text} needs {preferred}, has {item.Size} at {scale:P0} layout scale");
+                        }
+                }
+            }
+        });
+        Check("opening a large screenshot keeps actual size after first layout", () =>
+        {
+            using var image = new Bitmap(2000, 1400);
+            using var editor = new EditorForm(image);
+            using var draw = new DrawForm(image);
+            LayoutTree(editor);
+            LayoutTree(draw);
+            // Raise WinForms' protected lifecycle event without displaying or activating either window.
+            var shown = typeof(Form).GetMethod("OnShown", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            shown.Invoke(editor, [EventArgs.Empty]);
+            shown.Invoke(draw, [EventArgs.Empty]);
+            var canvas = Descendants(editor).OfType<ImageCanvas>().Single();
+            Equal(1f, canvas.Zoom);
+            Equal(1f, Descendants(draw).OfType<ImageCanvas>().Single().Zoom);
+            Assert(canvas.AutoScrollMinSize.Width >= image.Width && canvas.AutoScrollMinSize.Height >= image.Height,
+                "large screenshots can be scrolled at their original dimensions");
+            var status = Descendants(editor).OfType<StatusStrip>().Single();
+            Assert(status.Items.OfType<ToolStripStatusLabel>().Any(item => item.Text?.Contains("实际大小") == true),
+                "zoom status identifies the current actual-size view");
+        });
+        Check("actual-size canvas renders each source pixel without interpolation", () =>
+        {
+            using var image = new Bitmap(5, 5);
+            for (int y = 0; y < image.Height; y++)
+                for (int x = 0; x < image.Width; x++) image.SetPixel(x, y, (x + y) % 2 == 0 ? Color.Black : Color.White);
+            using var document = new EditorDocument(image);
+            using var canvas = new ImageCanvas { Document = document, CenterVertically = true, Size = new Size(100, 100) };
+            using var rendered = new Bitmap(100, 100);
+            canvas.DrawToBitmap(rendered, new Rectangle(Point.Empty, rendered.Size));
+            var origin = EditorViewport.Origin(canvas.ClientSize, image.Size, 1, Point.Empty, true);
+            Equal((float)Math.Truncate(origin.X), origin.X);
+            Equal((float)Math.Truncate(origin.Y), origin.Y);
+            for (int y = 0; y < image.Height; y++)
+                for (int x = 0; x < image.Width; x++)
+                    Equal(image.GetPixel(x, y).ToArgb(), rendered.GetPixel((int)origin.X + x, (int)origin.Y + y).ToArgb());
+        });
         Check("editor and drawing windows construct with valid menu shortcuts", () =>
         {
             using var image = new Bitmap(80, 60);
@@ -254,6 +321,7 @@ public static class EditorSelfTests
             throw new InvalidOperationException($"Expected {expected}; got {actual}");
     }
 
+
     private static void Assert(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
@@ -272,6 +340,17 @@ public static class EditorSelfTests
     {
         control.PerformLayout();
         foreach (Control child in control.Controls) LayoutTree(child);
+    }
+
+    private static void ScaleLayout(Form window, float scale)
+    {
+        if (scale == 1) return;
+        var fonts = Descendants(window).Prepend(window).Select(control => (Control: control, Font: control.Font)).ToArray();
+        window.SuspendLayout();
+        window.Scale(new SizeF(scale, scale));
+        foreach (var entry in fonts)
+            entry.Control.Font = new Font(entry.Font.FontFamily, entry.Font.Size * scale, entry.Font.Style, entry.Font.Unit);
+        window.ResumeLayout(true);
     }
 
     private static Rectangle BoundsWithin(Control control, Control ancestor)

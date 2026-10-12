@@ -15,9 +15,11 @@ internal sealed class DrawForm : Form
 
     public DrawForm(Bitmap image)
     {
+        SuspendLayout();
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
         BrandTheme.Apply(this);
         Text = "标注画室 · " + BrandTheme.Name;
-        AutoScaleMode = AutoScaleMode.Dpi;
         StartPosition = FormStartPosition.CenterParent;
         Size = new Size(1200, 820); MinimumSize = new Size(760, 530);
         BackColor = BrandTheme.Background;
@@ -48,7 +50,7 @@ internal sealed class DrawForm : Form
         heading.Controls.Add(new Label { Text = "标注画室", Font = new Font("Microsoft YaHei UI", 12, FontStyle.Bold), ForeColor = BrandTheme.Ink, Dock = DockStyle.Fill, Margin = Padding.Empty }, 0, 0);
         heading.Controls.Add(new Label { Text = "让重点清晰可见。完成后，返回图像工作台。", ForeColor = BrandTheme.Muted, Dock = DockStyle.Fill, Margin = Padding.Empty }, 0, 1);
         header.Controls.Add(heading, 1, 0); layout.Controls.Add(header, 0, 0); layout.SetColumnSpan(header, 2);
-        var palette = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(10, 8, 8, 0), WrapContents = true, BackColor = BrandTheme.Surface, AutoScroll = true };
+        var palette = new FlowLayoutPanel { Name = "DrawingTools", Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(10, 8, 8, 0), WrapContents = true, BackColor = BrandTheme.Surface, AutoScroll = true };
         layout.Controls.Add(palette, 0, 1); layout.Controls.Add(canvas, 1, 1);
         var tooltip = new ToolTip { AutoPopDelay = 7000 };
         var definitions = new (AnnotationTool Tool, string Icon, string Name)[]
@@ -66,8 +68,8 @@ internal sealed class DrawForm : Form
             if (definition.Tool == AnnotationTool.Highlight) AddGroup("强调与遮挡");
             var icon = EditorIcons.Make(definition.Icon, 20); icons.Add(icon);
             var button = new Button { Text = definition.Name, Image = icon, TextImageRelation = TextImageRelation.ImageBeforeText,
-                Size = new Size(78, 42), Margin = new Padding(2, 3, 2, 3), Tag = definition.Tool, AccessibleName = definition.Name };
-            BrandTheme.StyleButton(button); button.Padding = Padding.Empty;
+                AutoSize = true, MinimumSize = new Size(82, 42), Margin = new Padding(2, 3, 2, 3), Tag = definition.Tool, AccessibleName = definition.Name };
+            BrandTheme.StyleButton(button); button.Padding = new Padding(4, 0, 4, 0);
             button.FlatAppearance.BorderSize = 0;
             button.Click += (_, _) => SetTool(definition.Tool);
             tooltip.SetToolTip(button, definition.Name);
@@ -79,9 +81,11 @@ internal sealed class DrawForm : Form
         redo = SmallButton("redo", "重做", () => document.Redo());
         palette.Controls.Add(undo); palette.Controls.Add(redo);
         tooltip.SetToolTip(undo, "撤销 Ctrl+Z"); tooltip.SetToolTip(redo, "重做 Ctrl+Y");
-        var fit = new Button { Text = "适合画布", Size = new Size(160, 32), Margin = new Padding(2, 12, 2, 2) };
+        var actual = new Button { Text = "实际大小 · 100%", AutoSize = true, MinimumSize = new Size(160, 34), Margin = new Padding(2, 12, 2, 2) };
+        BrandTheme.StyleButton(actual); actual.Click += (_, _) => canvas.Zoom = 1; palette.Controls.Add(actual);
+        var fit = new Button { Text = "适合画布", AutoSize = true, MinimumSize = new Size(160, 34), Margin = new Padding(2, 2, 2, 2) };
         BrandTheme.StyleButton(fit); fit.Click += (_, _) => canvas.Fit(); palette.Controls.Add(fit);
-        zoomLabel = new Label { Text = "100%", TextAlign = ContentAlignment.MiddleCenter, Size = new Size(160, 27), ForeColor = BrandTheme.Muted };
+        zoomLabel = new Label { Text = "实际大小 · 100%", TextAlign = ContentAlignment.MiddleCenter, Size = new Size(160, 27), ForeColor = BrandTheme.Muted };
         palette.Controls.Add(zoomLabel);
 
         var bottom = new TableLayoutPanel { Name = "DrawingFooter", Dock = DockStyle.Fill, BackColor = BrandTheme.Surface,
@@ -104,7 +108,7 @@ internal sealed class DrawForm : Form
             swatch.FlatAppearance.BorderColor = BrandTheme.Border; swatch.Click += (_, _) => canvas.StrokeColor = color;
             options.Controls.Add(swatch);
         }
-        var custom = new Button { Text = "更多…", Size = new Size(66, 28), Margin = new Padding(5, 1, 12, 0) };
+        var custom = new Button { Text = "更多…", AutoSize = true, MinimumSize = new Size(66, 32), Margin = new Padding(5, 1, 12, 0) };
         BrandTheme.StyleButton(custom);
         custom.Click += (_, _) => { using var dialog = new ColorDialog { Color = canvas.StrokeColor, FullOpen = true }; if (dialog.ShowDialog(this) == DialogResult.OK) canvas.StrokeColor = dialog.Color; };
         options.Controls.Add(custom);
@@ -124,11 +128,12 @@ internal sealed class DrawForm : Form
         actions.Controls.Add(ok); actions.Controls.Add(cancel);
         CancelButton = cancel;
         document.Changed += (_, _) => { undo.Enabled = document.CanUndo; redo.Enabled = document.CanRedo; };
-        canvas.ZoomChanged += (_, _) => zoomLabel.Text = $"{canvas.Zoom:P0}";
+        canvas.ZoomChanged += (_, _) => zoomLabel.Text = canvas.Zoom == 1 ? "实际大小 · 100%" : $"缩放 {canvas.Zoom:P0}";
         undo.Enabled = redo.Enabled = false;
         SetTool(AnnotationTool.Arrow);
-        Shown += (_, _) => { canvas.Fit(); canvas.Focus(); };
+        Shown += (_, _) => canvas.Focus();
         FormClosed += (_, _) => tooltip.Dispose();
+        ResumeLayout(true);
 
         void AddGroup(string title)
         {

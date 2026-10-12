@@ -1,4 +1,4 @@
-# 帧简 Framelet 0.2.1
+# 帧简 Framelet 0.3.0
 
 **让画面，表达得更简单。** 帧简 Framelet 是面向日常高频场景的 Windows 截图、标注与录屏工具。截图、画箭头、遮住敏感信息，随后复制或保存；需要演示时，录制一段屏幕并裁掉首尾。
 
@@ -24,9 +24,11 @@
 从 [Releases](https://github.com/chenzhiyong1994/Framelet/releases/latest) 下载并解压 Windows x64 便携包，打开 `Framelet.exe`。发布包包含 .NET 运行时，无需另装 .NET；录屏和视频剪辑需要外部 FFmpeg。
 
 - 主面板点击“截取区域”快速截图；窗口、全屏入口常驻，“更多截图”收纳手绘、长截图、固定区域与重复截图。截图可送到编辑器、剪贴板、文件或打印机。
+- 拖动主面板标题栏靠近屏幕边缘会自动吸附；鼠标离开后收成小图标，悬停或点击展开，拖离边缘可恢复自由悬浮。底边会避开任务栏，贴边位置会记住。
 - 在编辑器中裁剪、缩放、旋转、调整亮度、添加边缘和标题，或进入绘图添加箭头、文字、序号、高亮、马赛克等。支持多标签、撤销/重做和图像合并。
 - 点击“录制屏幕”录制主显示器或矩形区域；结束后保存 MP4/WMV。录像机的“视频剪辑…”可预览并裁剪现有视频，也可转换输出格式。
-- “工具”菜单提供取色器、放大镜、标尺、聚光灯、十字线及定时自动截图。点击工具栏 `−` 收起，双击通知区域图标恢复。
+- 截图和进入标注时默认使用“实际大小 · 100%”，大图通过滚动浏览；可手动选择“适合窗口”或缩放。
+- “工具”菜单提供取色器、放大镜、标尺、聚光灯、十字线及定时自动截图。点击工具栏 `−` 收为图标，点击图标、双击通知区域图标或按 `Ctrl+Shift+F12` 展开。
 
 图像支持 PNG、JPEG、BMP、GIF、TIFF；GIF/TIFF 以首帧/首页静态图像编辑。PDF 仅支持单页栅格导出。绘图提交为像素，保留会话内撤销，不保留可再次选中的矢量对象。
 
@@ -52,7 +54,9 @@
 
 ## FFmpeg 与声音
 
-录像机中的“选择 FFmpeg…”可指定 `ffmpeg.exe`，也可以设置 `FRAMELET_FFMPEG`。未显式配置时，程序依次检查程序目录、`PATH` 和当前用户的 WinGet FFmpeg 安装目录。显式配置失效时会报错，不自动切换到其他版本。视频信息优先通过同目录的 `ffprobe.exe` 读取。
+FFmpeg 负责把屏幕画面编码成视频；便携包目前没有附带它。程序会自动查找已安装的引擎，找到后显示“录屏引擎就绪”，无需手动选文件。没有找到时，打开“引擎设置”可重新检测、选择已安装的 `ffmpeg.exe`，或访问官方下载页；手动选择会被保存。视频剪辑使用同一设置入口。
+
+也可以设置 `FRAMELET_FFMPEG`。显式配置失效时会报错，不自动切换到其他版本。视频信息优先通过同目录的 `ffprobe.exe` 读取。
 
 已确认 FFmpeg 8.1.1 提供 `gdigrab`；`libx264`、`wmv2` 的真实编码与视频剪辑已通过合成画面自检。其他安装需要包含这些组件。真实桌面录像的验证范围见验证记录。FFmpeg 不随本项目发布包分发。
 
@@ -67,7 +71,7 @@
 ./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish
 
 # 已有发布文件时，选择新的空目录
-./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.2.1
+./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.3.0
 
 # 图像、配置、格式和捕捉/拼接检查
 ./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe'
@@ -95,7 +99,7 @@ SDK 已在 `PATH` 中时可以省略 `-DotnetPath`，也可以设置 `DOTNET_EXE
 
 ## 配置与诊断
 
-0.2.1 使用统一的 Framelet 配置入口：主应用配置为 `%LOCALAPPDATA%\Framelet\settings.json`，录屏配置为同目录的 `recorder.json`。首次使用此目录时采用默认设置，可在“设置”中调整快捷键与输出目录，并在录像机中重新选择 FFmpeg。程序仅使用当前品牌的目录与环境变量，不自动导入其他位置的配置。
+主应用配置为 `%LOCALAPPDATA%\Framelet\settings.json`，录屏配置为同目录的 `recorder.json`。首次使用此目录时采用默认设置，可在“设置”中调整快捷键与输出目录；录屏引擎优先自动检测，也可在“引擎设置”中指定。程序仅使用当前品牌的目录与环境变量，不自动导入其他位置的配置。
 
 设置 `FRAMELET_TRACE=1` 可启用诊断日志，日志保存在主应用配置所在目录的 `diagnostics.log`。设置 `FRAMELET_FFMPEG` 可指定 FFmpeg 可执行文件；`--profile` 可为主应用指定独立配置文件。
 

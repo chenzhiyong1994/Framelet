@@ -41,9 +41,11 @@ public sealed class EditorForm : Form
 
     public EditorForm(Bitmap image, string? filePath = null)
     {
+        SuspendLayout();
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
         BrandTheme.Apply(this);
         Text = BrandTheme.Name + " · 图像工作台";
-        AutoScaleMode = AutoScaleMode.Dpi;
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 820); MinimumSize = new Size(820, 530);
         BackColor = BrandTheme.Background;
@@ -75,11 +77,11 @@ public sealed class EditorForm : Form
         documentSubtitle = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = BrandTheme.Muted, Margin = Padding.Empty };
         documentInfo.Controls.Add(documentTitle, 0, 0); documentInfo.Controls.Add(documentSubtitle, 0, 1); header.Controls.Add(documentInfo, 1, 0);
         var primaryActions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = Padding.Empty, Padding = new Padding(0, 6, 0, 0) };
-        saveAction = new Button { Text = "  保存图像", Size = new Size(124, 38), Margin = new Padding(6, 0, 0, 0), TextImageRelation = TextImageRelation.ImageBeforeText };
+        saveAction = new Button { Text = "保存图像", AutoSize = true, MinimumSize = new Size(124, 38), Margin = new Padding(6, 0, 0, 0), TextImageRelation = TextImageRelation.ImageBeforeText };
         BrandTheme.StyleButton(saveAction, true);
         var saveIcon = EditorIcons.Make("save", 18, Color.White); icons.Add(saveIcon); saveAction.Image = saveIcon;
         saveAction.Click += (_, _) => Run(() => SaveCurrent(false));
-        copyAction = new Button { Text = "  复制", Size = new Size(100, 38), Margin = new Padding(0, 0, 0, 0), TextImageRelation = TextImageRelation.ImageBeforeText };
+        copyAction = new Button { Text = "复制", AutoSize = true, MinimumSize = new Size(100, 38), Margin = new Padding(0, 0, 0, 0), TextImageRelation = TextImageRelation.ImageBeforeText };
         BrandTheme.StyleButton(copyAction);
         var copyIcon = EditorIcons.Make("copy", 18); icons.Add(copyIcon); copyAction.Image = copyIcon;
         copyAction.Click += (_, _) => Run(Copy);
@@ -97,8 +99,8 @@ public sealed class EditorForm : Form
         var status = new StatusStrip { Dock = DockStyle.Fill, AutoSize = false, SizingGrip = false, BackColor = BrandTheme.Background, ForeColor = BrandTheme.Muted, Padding = new Padding(20, 0, 20, 0), Renderer = BrandTheme.CreateToolStripRenderer() };
         details = new ToolStripStatusLabel { BorderSides = ToolStripStatusLabelBorderSides.Right, Padding = new Padding(0, 0, 12, 0) };
         message = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), ForeColor = BrandTheme.Muted };
-        zoomStatus = new ToolStripStatusLabel { IsLink = true, LinkColor = BrandTheme.Accent, ActiveLinkColor = BrandTheme.Ink };
-        zoomStatus.Click += (_, _) => { if (Current != null) Current.Canvas.Fit(); };
+        zoomStatus = new ToolStripStatusLabel { IsLink = true, LinkColor = BrandTheme.Accent, ActiveLinkColor = BrandTheme.Ink, ToolTipText = "点击恢复实际大小 · Ctrl+0" };
+        zoomStatus.Click += (_, _) => { if (Current != null) Current.Canvas.Zoom = 1; };
         status.Items.AddRange([details, message, zoomStatus]);
         layout.Controls.Add(menu, 0, 1); layout.Controls.Add(toolbar, 0, 2); layout.Controls.Add(tabs, 0, 3); layout.Controls.Add(status, 0, 4);
 
@@ -198,8 +200,8 @@ public sealed class EditorForm : Form
         DragEnter += (_, e) => { if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true) e.Effect = DragDropEffects.Copy; };
         DragDrop += (_, e) => { if (e.Data?.GetData(DataFormats.FileDrop) is string[] paths) foreach (var path in paths) OpenPath(path); };
         AddImage(image, filePath);
-        Shown += (_, _) => { if (Current != null && (Current.Document.Image.Width > Current.Canvas.Width || Current.Document.Image.Height > Current.Canvas.Height)) Current.Canvas.Fit(); };
         FormClosing += ConfirmFormClosing;
+        ResumeLayout(true);
     }
 
     public void AddImage(Bitmap image, string? filePath = null)
@@ -241,7 +243,7 @@ public sealed class EditorForm : Form
     {
         var icon = EditorIcons.Make(iconName, 19); icons.Add(icon);
         var button = new ToolStripButton(text, icon) { DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, TextImageRelation = TextImageRelation.ImageBeforeText,
-            AutoSize = false, Size = new Size(76, 36), Margin = new Padding(1, 0, 1, 0), ToolTipText = tip, Tag = iconName, ForeColor = BrandTheme.Ink };
+            AutoSize = true, Padding = new Padding(8, 4, 8, 4), Margin = new Padding(1, 0, 1, 0), ToolTipText = tip, Tag = iconName, ForeColor = BrandTheme.Ink };
         button.Click += (_, _) => Run(action); toolbar.Items.Add(button);
         if (needsImage) requiresImage.Add(button); return button;
     }
@@ -275,7 +277,7 @@ public sealed class EditorForm : Form
         }
         var image = current.Document.Image;
         details.Text = $"{image.Width:N0} × {image.Height:N0} 像素";
-        zoomStatus.Text = $"缩放 {current.Canvas.Zoom:P0}  ·  适合窗口";
+        zoomStatus.Text = current.Canvas.Zoom == 1 ? "实际大小 · 100%" : $"缩放 {current.Canvas.Zoom:P0}";
         message.Text = current.Canvas.HasSelection
             ? $"选区 {current.Canvas.Selection.Width} × {current.Canvas.Selection.Height}    ·    可裁剪、复制或添加马赛克"
             : "拖动选择区域；Ctrl + 滚轮缩放，中键拖动平移";

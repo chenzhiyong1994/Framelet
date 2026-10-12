@@ -18,6 +18,7 @@ public sealed class AppSettings
     public int FixedHeight { get; set; } = 480;
     public int PanelX { get; set; } = -1;
     public int PanelY { get; set; } = -1;
+    public string PanelDockEdge { get; set; } = "None";
     public string OutputFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Framelet");
     public string OutputFormat { get; set; } = "png";
     public OutputTarget Output { get; set; }

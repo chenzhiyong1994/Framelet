@@ -14,7 +14,7 @@ public sealed class RecorderForm : Form
     private readonly CheckBox minimize = new() { Text = "开始时最小化录像机", Checked = true, AutoSize = true };
     private readonly ComboBox audioDevice = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly Button refreshAudio = new() { Text = "刷新", Width = 56 };
-    private readonly Button ffmpegButton = new() { Text = "选择 FFmpeg…", Width = 120 };
+    private readonly Button ffmpegButton = new() { Text = "引擎设置…", Width = 120 };
     private readonly Button startButton = new() { Text = "●  录制", Width = 104, Height = 30 };
     private readonly Button pauseButton = new() { Text = "Ⅱ  暂停", Enabled = false, Width = 104, Height = 30 };
     private readonly Button stopButton = new() { Text = "■  结束", Enabled = false, Width = 104, Height = 30 };
@@ -33,6 +33,8 @@ public sealed class RecorderForm : Form
     private string? lastSavedVideo;
     private RecorderPreferences preferences;
     private bool busy;
+    private bool checkingEngine;
+    private string? resolvedEngine;
     private bool canClose;
     private bool hotkeyPause;
     private bool hotkeyStop;
@@ -50,6 +52,7 @@ public sealed class RecorderForm : Form
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = true;
+        AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
         preferences = RecorderPreferences.Load();
         frameRate.Value = Math.Clamp(preferences.FramesPerSecond, 1, 60);
@@ -117,16 +120,22 @@ public sealed class RecorderForm : Form
         Controls.AddRange([mark, wordmark, title, editButton, captureGroup, optionsGroup, recordingStatus, startButton, pauseButton, stopButton, closeButton, hints]);
         toolTip.SetToolTip(audioDevice, "仅支持本机 DirectShow 音频设备；系统声音需要可用的回环/立体声混音设备。本版本不支持摄像头叠加。");
         toolTip.SetToolTip(minimize, "可从任务栏恢复录像机；也可用 Ctrl+F10 暂停/继续、Ctrl+F11 结束。");
+        toolTip.SetToolTip(ffmpegButton, "通常会自动识别已安装的录屏引擎；仅在缺失或需要更换时设置。");
         fullScreen.CheckedChanged += (_, _) => RefreshArea();
         region.CheckedChanged += (_, _) => RefreshArea();
         selectArea.Click += (_, _) => SelectRegion();
         refreshAudio.Click += async (_, _) => await RefreshAudioAsync();
-        ffmpegButton.Click += (_, _) => ChooseFFmpeg();
+        ffmpegButton.Click += async (_, _) => await ConfigureEngineAsync();
         startButton.Click += async (_, _) => await StartRecordingAsync();
         pauseButton.Click += async (_, _) => await TogglePauseAsync();
         stopButton.Click += async (_, _) => await FinishRecordingAsync();
         closeButton.Click += (_, _) => Close();
-        editButton.Click += (_, _) => { using var editor = new VideoTrimForm(lastSavedVideo, preferences.FFmpegPath); editor.ShowDialog(this); };
+        editButton.Click += async (_, _) =>
+        {
+            using var editor = new VideoTrimForm(lastSavedVideo, preferences);
+            editor.ShowDialog(this);
+            await RefreshAudioAsync();
+        };
         timer.Tick += async (_, _) => await OnTimerAsync();
         FormClosing += OnClosing;
         Shown += async (_, _) => await RefreshAudioAsync();
@@ -171,39 +180,68 @@ public sealed class RecorderForm : Form
 
     private async Task RefreshAudioAsync()
     {
+        if (checkingEngine) return;
+        checkingEngine = true;
+        resolvedEngine = null;
         refreshAudio.Enabled = false;
+        SetButtons();
         try
         {
             var previous = audioDevice.SelectedItem?.ToString();
-            var devices = await FFmpegLocator.GetAudioDevicesAsync(preferences.FFmpegPath);
+            status.Text = "正在自动检测录屏引擎…";
+            resolvedEngine = await FFmpegLocator.CheckAvailableAsync(preferences.FFmpegPath);
             if (IsDisposed) return;
             audioDevice.Items.Clear();
             audioDevice.Items.Add("不录制声音");
-            foreach (var device in devices) audioDevice.Items.Add(device);
-            audioDevice.SelectedIndex = Math.Max(0, audioDevice.Items.IndexOf(previous ?? ""));
-            status.Text = devices.Count == 0 ? "就绪 · 未发现 DirectShow 音频设备" : "就绪";
-            toolTip.SetToolTip(status, devices.Count == 0 ? "当前可录制无声视频。录制声音需要启用本机 DirectShow 音频设备。" : "声音默认关闭，选中设备后才会采集声音。");
+            audioDevice.SelectedIndex = 0;
+            status.Text = "录屏引擎就绪 · " + (string.IsNullOrWhiteSpace(preferences.FFmpegPath) ? "自动识别" : "已记住设置");
+            toolTip.SetToolTip(status, "可以直接开始录制。引擎位置：\n" + resolvedEngine);
+            try
+            {
+                var devices = await FFmpegLocator.GetAudioDevicesAsync(resolvedEngine);
+                if (IsDisposed) return;
+                foreach (var device in devices) audioDevice.Items.Add(device);
+                audioDevice.SelectedIndex = Math.Max(0, audioDevice.Items.IndexOf(previous ?? ""));
+                toolTip.SetToolTip(audioDevice, devices.Count == 0
+                    ? "当前可录制无声视频。录制声音需要本机可用的 DirectShow 音频设备。"
+                    : "声音默认关闭，选中设备后才会采集声音。系统声音需要回环/立体声混音设备。");
+            }
+            catch (Exception ex)
+            {
+                if (IsDisposed) return;
+                status.Text = "录屏引擎就绪 · 暂可录制无声视频";
+                toolTip.SetToolTip(audioDevice, "声音设备检测失败，可点击刷新重试。\n" + ex.Message);
+            }
         }
         catch (Exception ex)
         {
-            status.Text = "请设置 FFmpeg 后开始录像";
+            if (IsDisposed) return;
+            resolvedEngine = null;
+            status.Text = "录屏引擎待设置 · 点击“引擎设置”";
             toolTip.SetToolTip(status, ex.Message);
         }
-        finally { if (!IsDisposed) refreshAudio.Enabled = true; }
+        finally
+        {
+            checkingEngine = false;
+            if (!IsDisposed) { refreshAudio.Enabled = true; SetButtons(); }
+        }
     }
 
-    private void ChooseFFmpeg()
+    private async Task ConfigureEngineAsync()
     {
-        using var dialog = new OpenFileDialog { Title = "选择 ffmpeg.exe", Filter = "FFmpeg|ffmpeg.exe|可执行程序|*.exe", CheckFileExists = true };
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        preferences.FFmpegPath = dialog.FileName;
-        preferences.Save();
-        _ = RefreshAudioAsync();
+        using var dialog = new RecordingEngineForm(preferences);
+        dialog.ShowDialog(this);
+        await RefreshAudioAsync();
     }
 
     private async Task StartRecordingAsync()
     {
-        if (busy) return;
+        if (busy || checkingEngine) return;
+        if (resolvedEngine is null)
+        {
+            await ConfigureEngineAsync();
+            if (resolvedEngine is null) return;
+        }
         if (region.Checked && selectedBounds is null)
         {
             SelectRegion();
@@ -220,7 +258,7 @@ public sealed class RecorderForm : Form
             preferences.MinimizeOnStart = minimize.Checked;
             preferences.Save();
             session = new ScreenRecordingSession(new RecordingOptions(bounds, (int)frameRate.Value,
-                includeCursor.Checked, audioDevice.SelectedIndex > 0 ? audioDevice.SelectedItem?.ToString() : null, preferences.FFmpegPath));
+                includeCursor.Checked, audioDevice.SelectedIndex > 0 ? audioDevice.SelectedItem?.ToString() : null, resolvedEngine));
             status.Text = "正在准备录像…";
             RegisterRecordingHotkeys();
             if (minimize.Checked) WindowState = FormWindowState.Minimized;
@@ -329,19 +367,19 @@ public sealed class RecorderForm : Form
     {
         if (IsDisposed) return;
         var active = session?.State is RecordingState.Recording or RecordingState.Paused or RecordingState.Saving;
-        captureGroup.Enabled = optionsGroup.Enabled = !busy && !active;
-        startButton.Enabled = !busy && !active;
-        editButton.Enabled = !busy && !active;
+        captureGroup.Enabled = optionsGroup.Enabled = !busy && !checkingEngine && !active;
+        startButton.Enabled = !busy && !checkingEngine && !active;
+        editButton.Enabled = !busy && !checkingEngine && !active;
         pauseButton.Enabled = !busy && session?.State is RecordingState.Recording or RecordingState.Paused;
         stopButton.Enabled = pauseButton.Enabled;
-        closeButton.Enabled = !busy;
+        closeButton.Enabled = !busy && !checkingEngine;
         pauseButton.Text = session?.State == RecordingState.Paused ? "▶  继续" : "Ⅱ  暂停";
     }
 
     private async void OnClosing(object? sender, FormClosingEventArgs e)
     {
         if (canClose) return;
-        if (busy) { e.Cancel = true; return; }
+        if (busy || checkingEngine) { e.Cancel = true; return; }
         if (session?.State is RecordingState.Recording or RecordingState.Paused)
         {
             e.Cancel = true;

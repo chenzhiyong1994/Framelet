@@ -25,6 +25,16 @@ public sealed class CapturePanel : Form
     private Point dragOrigin;
     private Point dragPosition;
     private bool dragging;
+    private bool dragMoved;
+    private bool collapsed;
+    private PanelEdge dockEdge;
+    private Point expandedLocation;
+    private long? idleSince;
+    private long? hoverSince;
+    private readonly System.Windows.Forms.Timer dockTimer = new() { Interval = 100 };
+    private readonly ToolTip panelTip = new();
+    private int Px(int value) => (int)Math.Round(value * DeviceDpi / 96d);
+    private Size ExpandedSize => new(Px(420), Px(208));
     public static readonly (CaptureMode Mode, string Name, string Icon, string Shortcut, uint Modifiers)[] Captures =
     [
         (CaptureMode.ActiveWindow, "捕捉活动窗口", "active", "Alt+PrtSc", 1),
@@ -39,6 +49,9 @@ public sealed class CapturePanel : Form
 
     public CapturePanel(AppSettings settings)
     {
+        SuspendLayout();
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
         this.settings = settings;
         BrandTheme.Apply(this);
         Text = BrandTheme.Name;
@@ -77,14 +90,11 @@ public sealed class CapturePanel : Form
         options.DropDownOpening += (_, _) => { ClearMenu(options.DropDownItems); foreach (var item in BuildOptionsItems()) options.DropDownItems.Add(item); };
         strip.Items.Add(options);
         Controls.Add(strip);
-        foreach (var entry in new[] { ("−", "收起工具栏", 70, (Action)Hide), ("×", "退出帧简", 38, (Action)RequestExit) })
+        foreach (var entry in new[] { ("−", "收起为图标", 70, (Action)CollapsePanel), ("×", "退出帧简", 38, (Action)RequestExit) })
         {
             var button = new Button { Text = entry.Item1, AccessibleName = entry.Item2, Bounds = new Rectangle(Width - entry.Item3, 16, 26, 27), TabStop = false, FlatStyle = FlatStyle.Flat, BackColor = BrandTheme.Background, ForeColor = BrandTheme.Muted, Cursor = Cursors.Hand };
             button.FlatAppearance.BorderSize = 0; button.FlatAppearance.MouseOverBackColor = BrandTheme.AccentPale; button.Click += (_, _) => entry.Item4(); Controls.Add(button);
         }
-        var workArea = Screen.PrimaryScreen!.WorkingArea;
-        Location = !(settings.PanelX == -1 && settings.PanelY == -1) && Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(new Rectangle(settings.PanelX, settings.PanelY, Width, Height)))
-            ? new Point(settings.PanelX, settings.PanelY) : new Point(workArea.Right - Width - 45, workArea.Top + 45);
         tray = new NotifyIcon { Icon = Icon, Text = BrandTheme.Name + " — 双击打开", Visible = true };
         tray.DoubleClick += (_, _) => ShowPanel();
         var trayMenu = new ContextMenuStrip { Renderer = BrandTheme.CreateToolStripRenderer() };
@@ -106,18 +116,106 @@ public sealed class CapturePanel : Form
         foregroundTimer.Start();
         intervalTimer.Tick += async (_, _) => { if (!busy) { intervalCount++; await CaptureAsync(CaptureMode.FullScreen, true); } };
         Load += (_, _) => RegisterShortcuts();
-        Shown += (_, _) => { if (AppSettings.LoadWarning != null) Notify("配置无法读取，已使用默认设置。原文件未删除。", ToolTipIcon.Warning); };
+        Shown += (_, _) => {
+            if (dockEdge != PanelEdge.None) CollapsePanel();
+            if (AppSettings.LoadWarning != null) Notify("配置无法读取，已使用默认设置。原文件未删除。", ToolTipIcon.Warning);
+        };
         MouseDown += (_, e) =>
         {
             if (e.Button == MouseButtons.Right) { trayMenu.Show(this, e.Location); return; }
-            if (e.Y >= 62) return;
-            dragging = true; dragOrigin = Cursor.Position; dragPosition = Location; Capture = true;
+            if (e.Button != MouseButtons.Left || (!collapsed && e.Y >= Px(62))) return;
+            // Use the event position: queued input may already have moved the global cursor.
+            dragging = true; dragMoved = false; dragOrigin = PointToScreen(e.Location); dragPosition = Location; Capture = true;
         };
-        MouseMove += (_, _) => { if (dragging) Location = new Point(dragPosition.X + Cursor.Position.X - dragOrigin.X, dragPosition.Y + Cursor.Position.Y - dragOrigin.Y); };
-        MouseUp += (_, _) => { dragging = false; Capture = false; Persist(); };
+        MouseMove += (_, _) => {
+            if (!dragging) return;
+            Point delta = new(Cursor.Position.X - dragOrigin.X, Cursor.Position.Y - dragOrigin.Y);
+            if (!dragMoved && Math.Abs(delta.X) < Px(4) && Math.Abs(delta.Y) < Px(4)) return;
+            if (collapsed) { ExpandPanel(); dragPosition = Location; }
+            dragMoved = true;
+            Location = new Point(dragPosition.X + delta.X, dragPosition.Y + delta.Y);
+        };
+        MouseUp += (_, e) => {
+            if (!dragging || e.Button != MouseButtons.Left) return;
+            dragging = false; Capture = false;
+            if (dragMoved) SnapToEdge();
+            else if (collapsed) ExpandPanel();
+        };
+        MouseCaptureChanged += (_, _) => { if (dragging && !Capture) { dragging = false; if (dragMoved) SnapToEdge(); } };
+        dockTimer.Tick += (_, _) => UpdateDockState();
+        VisibleChanged += (_, _) => { idleSince = hoverSince = null; if (Visible) dockTimer.Start(); else dockTimer.Stop(); };
+        DpiChanged += (_, _) => BeginInvoke(() => {
+            if (IsDisposed || WindowState != FormWindowState.Normal) return;
+            ClientSize = collapsed ? new Size(Px(48), Px(48)) : ExpandedSize;
+            if (dragging) { dragOrigin = Cursor.Position; dragPosition = Location; }
+            else Location = PanelDocking.Anchor(Location, Size, Screen.FromRectangle(Bounds).WorkingArea, dockEdge);
+            if (!collapsed) expandedLocation = Location;
+            Invalidate();
+        });
         AllowDrop = true;
         DragEnter += (_, e) => e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
         DragDrop += (_, e) => { if (e.Data?.GetData(DataFormats.FileDrop) is string[] files) foreach (var file in files) OpenFile(file); };
+        ResumeLayout(true);
+        var workArea = Screen.PrimaryScreen!.WorkingArea;
+        Point saved = new(settings.PanelX, settings.PanelY);
+        bool hasSaved = saved != new Point(-1, -1) && Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(new Rectangle(saved, ExpandedSize)));
+        if (Enum.TryParse<PanelEdge>(settings.PanelDockEdge, out var edge) && Enum.IsDefined(edge) && hasSaved) dockEdge = edge;
+        Location = hasSaved ? PanelDocking.Anchor(saved, ExpandedSize, Screen.FromRectangle(new Rectangle(saved, ExpandedSize)).WorkingArea, dockEdge)
+            : new Point(workArea.Right - Width - Px(45), workArea.Top + Px(45));
+        expandedLocation = Location;
+        panelTip.SetToolTip(this, "拖动标题栏贴边自动收起，移入或点击图标展开");
+    }
+
+    private void SnapToEdge()
+    {
+        var snapped = PanelDocking.Snap(Location, ExpandedSize, Screen.FromRectangle(Bounds).WorkingArea, Px(20));
+        dockEdge = snapped.Edge; Location = snapped.Location; expandedLocation = Location;
+        idleSince = hoverSince = null; Persist();
+    }
+    private void CollapsePanel()
+    {
+        if (collapsed || dragging || busy || WindowState != FormWindowState.Normal) return;
+        expandedLocation = Location;
+        var area = Screen.FromRectangle(Bounds).WorkingArea;
+        collapsed = true;
+        SuspendLayout();
+        foreach (Control child in Controls) child.Visible = false;
+        ClientSize = new Size(Px(48), Px(48));
+        Location = PanelDocking.Anchor(expandedLocation, Size, area, dockEdge);
+        ResumeLayout(true);
+        AccessibleName = "展开帧简工具栏";
+        idleSince = hoverSince = null;
+        Invalidate();
+    }
+    private void ExpandPanel()
+    {
+        if (!collapsed) return;
+        var area = Screen.FromRectangle(Bounds).WorkingArea;
+        collapsed = false;
+        SuspendLayout();
+        ClientSize = ExpandedSize;
+        Location = PanelDocking.Anchor(expandedLocation, Size, area, dockEdge);
+        foreach (Control child in Controls) child.Visible = true;
+        ResumeLayout(true);
+        expandedLocation = Location; AccessibleName = "帧简截图与录屏工具栏";
+        idleSince = hoverSince = null; Invalidate();
+    }
+    private void UpdateDockState()
+    {
+        if (!Visible || !Enabled || WindowState != FormWindowState.Normal || dragging || busy || IsDisposed) { idleSince = hoverSince = null; return; }
+        bool inside = Bounds.Contains(Cursor.Position);
+        long now = Environment.TickCount64;
+        if (collapsed)
+        {
+            if (!inside) { hoverSince = null; return; }
+            hoverSince ??= now;
+            if (now - hoverSince.Value >= 250) ExpandPanel();
+            return;
+        }
+        bool menuOpen = tray.ContextMenuStrip?.Visible == true || strip.Items.OfType<ToolStripDropDownItem>().Any(item => item.DropDown.Visible);
+        if (dockEdge == PanelEdge.None || inside || menuOpen) { idleSince = null; return; }
+        idleSince ??= now;
+        if (now - idleSince.Value >= 700) CollapsePanel();
     }
 
     protected override bool ShowWithoutActivation => true;
@@ -139,18 +237,19 @@ public sealed class CapturePanel : Form
         e.Graphics.Clear(BrandTheme.Background);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var line = new Pen(BrandTheme.Border);
-        using var frame = BrandTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 12);
+        using var frame = BrandTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), Px(12));
         e.Graphics.DrawPath(line, frame);
-        e.Graphics.DrawImage(brandMark, 18, 15, 36, 36);
+        if (collapsed) { e.Graphics.DrawImage(brandMark, new Rectangle(Px(8), Px(8), Px(32), Px(32))); return; }
+        e.Graphics.DrawImage(brandMark, Px(18), Px(15), Px(36), Px(36));
         using var title = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
         using var wordmark = new Font("Segoe UI", 7.5F, FontStyle.Bold);
         using var small = new Font("Microsoft YaHei UI", 8F);
-        TextRenderer.DrawText(e.Graphics, BrandTheme.ShortName, title, new Point(64, 10), BrandTheme.Ink);
-        TextRenderer.DrawText(e.Graphics, BrandTheme.Wordmark, wordmark, new Point(66, 34), BrandTheme.Muted);
-        TextRenderer.DrawText(e.Graphics, "让画面，表达得更简单。", small, new Rectangle(159, 16, 180, 30), BrandTheme.Muted, TextFormatFlags.VerticalCenter);
-        e.Graphics.DrawLine(line, 18, 180, Width - 18, 180);
-        TextRenderer.DrawText(e.Graphics, "拖入图片，即可编辑", small, new Rectangle(18, 182, 172, 24), BrandTheme.Muted, TextFormatFlags.VerticalCenter);
-        TextRenderer.DrawText(e.Graphics, CaptureShortcut(CaptureMode.Rectangle), small, new Rectangle(207, 182, Width - 226, 24), BrandTheme.Muted, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+        TextRenderer.DrawText(e.Graphics, BrandTheme.ShortName, title, new Point(Px(64), Px(10)), BrandTheme.Ink);
+        TextRenderer.DrawText(e.Graphics, BrandTheme.Wordmark, wordmark, new Point(Px(66), Px(34)), BrandTheme.Muted);
+        TextRenderer.DrawText(e.Graphics, "让画面，表达得更简单。", small, new Rectangle(Px(159), Px(16), Px(180), Px(30)), BrandTheme.Muted, TextFormatFlags.VerticalCenter);
+        e.Graphics.DrawLine(line, Px(18), Px(180), Width - Px(18), Px(180));
+        TextRenderer.DrawText(e.Graphics, "拖入图片，即可编辑", small, new Rectangle(Px(18), Px(182), Px(172), Px(24)), BrandTheme.Muted, TextFormatFlags.VerticalCenter);
+        TextRenderer.DrawText(e.Graphics, CaptureShortcut(CaptureMode.Rectangle), small, new Rectangle(Px(207), Px(182), Width - Px(226), Px(24)), BrandTheme.Muted, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
     }
     private ToolStripButton AddButton(string label, string icon, Action action, string shortcut = "")
     {
@@ -322,7 +421,12 @@ public sealed class CapturePanel : Form
     }
     private async Task OpenUtility(UtilityMode mode)
     { if (busy) return; busy = true; bool wasVisible = Visible; Hide(); try { await Task.Delay(160); using var utility = new ScreenUtilityForm(mode); utility.ShowDialog(); } catch (Exception ex) { MessageBox.Show(ex.Message, "辅助工具"); } finally { busy = false; if (wasVisible && !IsDisposed) Show(); } }
-    private void ShowPanel() { Show(); TopMost = settings.TopMost; Invalidate(); }
+    private void ShowPanel()
+    {
+        if (WindowState != FormWindowState.Normal) WindowState = FormWindowState.Normal;
+        ExpandPanel(); Show(); TopMost = settings.TopMost;
+        idleSince = hoverSince = null; Invalidate();
+    }
     internal void ReceiveLaunch(LaunchRequest request)
     {
         if (IsDisposed) return;
@@ -348,7 +452,7 @@ public sealed class CapturePanel : Form
         try { using var dialog = new SettingsForm(settings, conflicts); if (dialog.ShowDialog() == DialogResult.OK) { TopMost = settings.TopMost; Persist(); RegisterShortcuts(); } }
         finally { if (restorePanel && !IsDisposed) Show(); }
     }
-    private void ShowAbout() => MessageBox.Show(BrandTheme.Name + " 0.2\n\n让画面，表达得更简单。\n\n快速截图、清晰标注、轻松录屏。\n为日常沟通而做的轻量桌面工具。\n\n使用说明和功能范围可在程序目录的 README 与 docs 中查看。", "关于帧简", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    private void ShowAbout() => MessageBox.Show(BrandTheme.Name + " " + typeof(CapturePanel).Assembly.GetName().Version?.ToString(3) + "\n\n让画面，表达得更简单。\n\n快速截图、清晰标注、轻松录屏。\n为日常沟通而做的轻量桌面工具。\n\n使用说明和功能范围可在程序目录的 README 与 docs 中查看。", "关于帧简", MessageBoxButtons.OK, MessageBoxIcon.Information);
     private void RegisterShortcuts()
     {
         foreach (int id in hotkeys) Native.UnregisterHotKey(Handle, id); hotkeys.Clear(); conflicts.Clear();
@@ -366,7 +470,7 @@ public sealed class CapturePanel : Form
     }
     private void Notify(string message, ToolTipIcon kind = ToolTipIcon.Info) => tray.ShowBalloonTip(3500, BrandTheme.Name, message, kind);
     private void Persist()
-    { settings.PanelX = Left; settings.PanelY = Top; try { settings.Save(); } catch (Exception ex) { Notify("设置无法保存：" + ex.Message, ToolTipIcon.Warning); } }
+    { Point location = collapsed ? expandedLocation : WindowState == FormWindowState.Normal ? Location : RestoreBounds.Location; settings.PanelX = location.X; settings.PanelY = location.Y; settings.PanelDockEdge = dockEdge.ToString(); try { settings.Save(); } catch (Exception ex) { Notify("设置无法保存：" + ex.Message, ToolTipIcon.Warning); } }
     private void RequestExit() { Close(); }
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
@@ -377,7 +481,7 @@ public sealed class CapturePanel : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { foreach (int id in hotkeys) Native.UnregisterHotKey(Handle, id); foregroundTimer.Dispose(); intervalTimer.Dispose(); if (tray.ContextMenuStrip != null) { ClearMenu(tray.ContextMenuStrip.Items); tray.ContextMenuStrip.Dispose(); } tray.Dispose(); ClearMenu(strip.Items); ClearMenu(launchStrip.Items); brandMark.Dispose(); }
+        if (disposing) { foreach (int id in hotkeys) Native.UnregisterHotKey(Handle, id); foregroundTimer.Dispose(); intervalTimer.Dispose(); dockTimer.Dispose(); panelTip.Dispose(); if (tray.ContextMenuStrip != null) { ClearMenu(tray.ContextMenuStrip.Items); tray.ContextMenuStrip.Dispose(); } tray.Dispose(); ClearMenu(strip.Items); ClearMenu(launchStrip.Items); brandMark.Dispose(); }
         base.Dispose(disposing);
     }
     private static void ClearMenu(ToolStripItemCollection items)

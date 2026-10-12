@@ -18,37 +18,75 @@ public static class FFmpegLocator
 {
     public static string Resolve(string? configuredPath = null)
     {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        return Resolve(configuredPath, Environment.GetEnvironmentVariable("FRAMELET_FFMPEG"), AppContext.BaseDirectory,
+            Environment.GetEnvironmentVariable("PATH"),
+            [Path.Combine(local, "Microsoft", "WinGet"), Path.Combine(programFiles, "WinGet")]);
+    }
+
+    internal static string Resolve(string? configuredPath, string? environmentPath, string appDirectory,
+        string? executablePath, IEnumerable<string> wingetRoots)
+    {
         var explicitPath = string.IsNullOrWhiteSpace(configuredPath)
-            ? Environment.GetEnvironmentVariable("FRAMELET_FFMPEG") : configuredPath;
+            ? environmentPath : configuredPath;
         if (!string.IsNullOrWhiteSpace(explicitPath))
         {
-            if (File.Exists(explicitPath)) return Path.GetFullPath(explicitPath);
-            throw new FileNotFoundException("指定的 FFmpeg 不存在，请在录像选项中重新选择。", explicitPath);
+            var normalized = Environment.ExpandEnvironmentVariables(explicitPath.Trim().Trim('"'));
+            if (File.Exists(normalized)) return Path.GetFullPath(normalized);
+            var recovery = string.IsNullOrWhiteSpace(configuredPath)
+                ? "环境变量 FRAMELET_FFMPEG 指定的录屏引擎找不到了。请更新该变量，或在“引擎设置”中选择已安装的引擎。"
+                : "已选择的录屏引擎找不到了，请在“引擎设置”中重新自动检测或选择。";
+            throw new FileNotFoundException(recovery, normalized);
         }
-        var bundled = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
-        if (File.Exists(bundled)) return bundled;
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+        foreach (var relative in new[] { "ffmpeg.exe", Path.Combine("tools", "ffmpeg", "bin", "ffmpeg.exe") })
         {
-            var candidate = Path.Combine(directory.Trim().Trim('"'), "ffmpeg.exe");
-            if (File.Exists(candidate)) return candidate;
+            var candidate = Path.Combine(appDirectory, relative);
+            if (File.Exists(candidate)) return Path.GetFullPath(candidate);
         }
-        var winget = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Microsoft", "WinGet", "Packages");
-        if (Directory.Exists(winget))
+        foreach (var directory in (executablePath ?? "").Split(Path.PathSeparator))
         {
-            foreach (var package in Directory.EnumerateDirectories(winget, "*FFmpeg*"))
+            var normalized = Environment.ExpandEnvironmentVariables(directory.Trim().Trim('"'));
+            // Empty or relative PATH entries would unexpectedly search the working directory.
+            if (string.IsNullOrWhiteSpace(normalized) || !Path.IsPathFullyQualified(normalized)) continue;
+            var candidate = Path.Combine(normalized, "ffmpeg.exe");
+            if (File.Exists(candidate)) return Path.GetFullPath(candidate);
+        }
+        foreach (var winget in wingetRoots)
+        {
+            var link = Path.Combine(winget, "Links", "ffmpeg.exe");
+            if (File.Exists(link)) return Path.GetFullPath(link);
+            var packages = Path.Combine(winget, "Packages");
+            if (!Directory.Exists(packages)) continue;
+            try
             {
-                try
+                foreach (var package in Directory.EnumerateDirectories(packages, "*FFmpeg*").Order(StringComparer.OrdinalIgnoreCase))
                 {
-                    var found = Directory.EnumerateFiles(package, "ffmpeg.exe", SearchOption.AllDirectories)
-                        .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
-                    if (found is not null) return found;
+                    try
+                    {
+                        var found = Directory.EnumerateFiles(package, "ffmpeg.exe", new EnumerationOptions
+                        {
+                            RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint
+                        }).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+                        if (found is not null) return Path.GetFullPath(found);
+                    }
+                    catch (UnauthorizedAccessException) { }
+                    catch (IOException) { }
                 }
-                catch (UnauthorizedAccessException) { }
-                catch (IOException) { }
             }
+            catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
         }
-        throw new FileNotFoundException("未找到 FFmpeg。请先安装 FFmpeg，或点击“选择 FFmpeg”指定 ffmpeg.exe。支持环境变量 FRAMELET_FFMPEG 与 PATH。");
+        throw new FileNotFoundException("还没有找到录屏引擎。Framelet 使用 FFmpeg 保存和剪辑视频，请打开“引擎设置”获取或选择已安装的引擎。截图功能不受影响。");
+    }
+
+    public static async Task<string> CheckAvailableAsync(string? configuredPath = null)
+    {
+        var path = Resolve(configuredPath);
+        var result = await RunAsync(path, ["-hide_banner", "-version"], TimeSpan.FromSeconds(8));
+        if (result.ExitCode != 0 || !Regex.IsMatch(result.Log, @"(?m)^ffmpeg version\s", RegexOptions.IgnoreCase))
+            throw new InvalidOperationException("这个文件不是可用的 FFmpeg 引擎，请在“引擎设置”中选择 ffmpeg.exe。");
+        return path;
     }
 
     public static async Task<IReadOnlyList<string>> GetAudioDevicesAsync(string? configuredPath = null)
@@ -86,8 +124,7 @@ public static class FFmpegLocator
             await process.WaitForExitAsync();
             throw new TimeoutException("FFmpeg 响应超时。");
         }
-        await output;
-        return (process.ExitCode, await errors);
+        return (process.ExitCode, (await errors) + (await output));
     }
 }
 
