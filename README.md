@@ -1,8 +1,8 @@
-# 帧简 Framelet 0.2
+# 帧简 Framelet 0.2.1
 
 **让画面，表达得更简单。** 帧简 Framelet 是面向日常高频场景的 Windows 截图、标注与录屏工具。截图、画箭头、遮住敏感信息，随后复制或保存；需要演示时，录制一段屏幕并裁掉首尾。
 
-[下载 Windows x64 便携版](https://github.com/chenzhiyong1994/Framelet/releases/latest) · [从源码构建](#从源码构建与验证) · [功能边界](docs/feature-parity.md)
+[下载 Windows x64 便携版](https://github.com/chenzhiyong1994/Framelet/releases/latest) · [从源码构建](#从源码构建与验证) · [功能边界](docs/features.md)
 
 ![帧简 Framelet 截图与录屏面板](docs/images/framelet-panel.jpg)
 
@@ -17,7 +17,7 @@
 - 复制图像用于粘贴，或保存为常用图片格式；保存失败时保留原文件和当前编辑。
 - 录制屏幕或指定区域，暂停/继续、保存 MP4，并裁掉视频首尾。
 
-当前聚焦常用操作的步骤、响应速度、稳定性和清晰反馈。FSC 私有格式兼容、Office/FTP 集成、扫描仪、复杂视频特效及完整矢量对象编辑不属于当前产品范围。实现状态与已验证范围分别见[功能对照](docs/feature-parity.md)和[验证记录](docs/validation.md)。
+当前聚焦常用操作的步骤、响应速度、稳定性和清晰反馈。Office/FTP 集成、扫描仪、复杂视频特效及完整矢量对象编辑不属于当前产品范围。实现状态与已验证范围分别见[功能说明](docs/features.md)和[验证记录](docs/validation.md)。
 
 ## 直接运行
 
@@ -52,7 +52,7 @@
 
 ## FFmpeg 与声音
 
-录像机中的“选择 FFmpeg…”可指定 `ffmpeg.exe`，也可以设置 `FSCAPTURE_FFMPEG`。未显式配置时，程序依次检查程序目录、`PATH` 和当前用户的 WinGet FFmpeg 安装目录。显式配置失效时会报错，不自动切换到其他版本。视频信息优先通过同目录的 `ffprobe.exe` 读取。
+录像机中的“选择 FFmpeg…”可指定 `ffmpeg.exe`，也可以设置 `FRAMELET_FFMPEG`。未显式配置时，程序依次检查程序目录、`PATH` 和当前用户的 WinGet FFmpeg 安装目录。显式配置失效时会报错，不自动切换到其他版本。视频信息优先通过同目录的 `ffprobe.exe` 读取。
 
 已确认 FFmpeg 8.1.1 提供 `gdigrab`；`libx264`、`wmv2` 的真实编码与视频剪辑已通过合成画面自检。其他安装需要包含这些组件。真实桌面录像的验证范围见验证记录。FFmpeg 不随本项目发布包分发。
 
@@ -60,11 +60,14 @@
 
 ## 从源码构建与验证
 
-主项目为 `src/CaptureReplica/CaptureReplica.csproj`，`global.json` 指定 .NET SDK `10.0.401`，允许同功能带的补丁升级。在仓库根目录运行：
+主项目为 `src/Framelet/Framelet.csproj`，`global.json` 指定 .NET SDK `10.0.401`，允许同功能带的补丁升级。在仓库根目录运行：
 
 ```powershell
 # 构建并生成 dist/Framelet/Framelet.exe
 ./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish
+
+# 已有发布文件时，选择新的空目录
+./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.2.1
 
 # 图像、配置、格式和捕捉/拼接检查
 ./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe'
@@ -73,7 +76,7 @@
 ./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe' -WithRecording
 ```
 
-SDK 已在 `PATH` 中时可以省略 `-DotnetPath`，也可以设置 `DOTNET_EXE`。发布时同步复制 README 与 `docs/`，重复发布覆盖同名文档，不清理目标目录中的其他文件。录屏自检使用合成画面，不采集桌面或麦克风。应用自检报告写入 `artifacts/self-tests/results.json`；这些检查不等同于所有桌面交互都已验证，人工验证记录见 [验证说明](docs/validation.md)。
+SDK 已在 `PATH` 中时可以省略 `-DotnetPath`，也可以设置 `DOTNET_EXE`。发布目录必须为空，脚本会复制当前 README、文档、品牌素材及运行时许可；已有文件时用 `-PublishDirectory` 选择新目录，避免旧文件混入。录屏自检使用合成画面，不采集桌面或麦克风。应用自检报告写入 `artifacts/self-tests/results.json`；这些检查不等同于所有桌面交互都已验证，人工验证记录见 [验证说明](docs/validation.md)。
 
 支持的命令行入口：
 
@@ -88,10 +91,14 @@ SDK 已在 `PATH` 中时可以省略 `-DotnetPath`，也可以设置 `DOTNET_EXE
 | `--output 输出目录` | 指定自检产物目录，与 `--self-test` 配合 |
 | `--with-recording` | 在应用自检中增加 FFmpeg 编码与裁剪检查 |
 
-品牌色、标志和界面原则见 [品牌说明](docs/brand.md)。0.2 延续已有设置；新安装默认将截图存入图片目录的 Framelet 文件夹。`FSCAPTURE_FFMPEG` 环境变量继续兼容。
+品牌色、标志和界面原则见 [品牌说明](docs/brand.md)。默认将截图存入图片目录的 Framelet 文件夹。
 
-## 项目来源与许可
+## 配置与诊断
 
-Framelet 以 FastStone Capture 10.3 的可观察界面、配置结构和行为为参考，独立实现常用工作流，并使用原创品牌、图标和界面设计。未反编译或复制其实现代码，仓库不包含原产品的程序、资源或用户配置。观察方法和证据边界见 [逆向分析记录](docs/reverse-engineering.md)。
+0.2.1 使用统一的 Framelet 配置入口：主应用配置为 `%LOCALAPPDATA%\Framelet\settings.json`，录屏配置为同目录的 `recorder.json`。首次使用此目录时采用默认设置，可在“设置”中调整快捷键与输出目录，并在录像机中重新选择 FFmpeg。程序仅使用当前品牌的目录与环境变量，不自动导入其他位置的配置。
+
+设置 `FRAMELET_TRACE=1` 可启用诊断日志，日志保存在主应用配置所在目录的 `diagnostics.log`。设置 `FRAMELET_FFMPEG` 可指定 FFmpeg 可执行文件；`--profile` 可为主应用指定独立配置文件。
+
+## 许可
 
 本项目采用 [MIT License](LICENSE)。便携包中的 .NET 运行时与外部 FFmpeg 的说明见 [第三方组件说明](THIRD-PARTY-NOTICES.md)。

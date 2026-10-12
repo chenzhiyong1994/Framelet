@@ -1,4 +1,4 @@
-# 第三方组件与来源
+# 第三方组件说明
 
 Framelet 源码、文档与本项目原创几何品牌素材使用根目录 [MIT 许可证](LICENSE)。
 
@@ -14,8 +14,6 @@ Windows 便携包包含 .NET Runtime 与 Windows Desktop Runtime。构建脚本�
 
 录屏与视频裁剪调用用户另行安装的 [FFmpeg](https://ffmpeg.org/)。本仓库与官方便携包不包含 FFmpeg 二进制。不同 FFmpeg 构建启用的组件及许可可能不同，分发者应查阅所用构建的 [许可说明](https://ffmpeg.org/legal.html)。
 
-## 品牌与参考产品
-
-Framelet 根据 FastStone Capture 的可观察行为独立实现日常工作流，不包含其程序、资源、注册信息或源代码。FastStone Capture 为其权利人的产品名称；Framelet 与其没有隶属或赞助关系。
+## 品牌素材与字体
 
 应用图标由 `scripts/create-icon.ps1` 的本地几何定义生成；界面预览使用本项目的测试画板。字体由操作系统提供，仓库和发布包不分发字体文件。

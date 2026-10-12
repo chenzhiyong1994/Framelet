@@ -2,7 +2,7 @@ param([string]$AssetsDirectory = '')
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $projectRoot = Split-Path -Parent $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($AssetsDirectory)) { $AssetsDirectory = Join-Path $projectRoot 'src\CaptureReplica\Assets' }
+if ([string]::IsNullOrWhiteSpace($AssetsDirectory)) { $AssetsDirectory = Join-Path $projectRoot 'src\Framelet\Assets' }
 $assets = [IO.Path]::GetFullPath($AssetsDirectory)
 New-Item -ItemType Directory -Path $assets -Force | Out-Null
 

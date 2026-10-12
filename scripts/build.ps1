@@ -1,6 +1,7 @@
 param(
     [string]$DotnetPath = $env:DOTNET_EXE,
-    [switch]$Publish
+    [switch]$Publish,
+    [string]$PublishDirectory
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -13,13 +14,19 @@ if (-not $DotnetPath -or -not (Test-Path -LiteralPath $DotnetPath)) {
 }
 $sdk = & $DotnetPath --version
 if ($LASTEXITCODE -ne 0 -or $sdk -notmatch '^10\.0\.4\d\d$') { throw "不支持的 SDK：$sdk；请使用 global.json 指定的 10.0.4xx。" }
-$project = Join-Path $projectRoot 'src\CaptureReplica\CaptureReplica.csproj'
+$project = Join-Path $projectRoot 'src\Framelet\Framelet.csproj'
 Push-Location $projectRoot
 try {
     & $DotnetPath build $project -c Release --nologo
     if ($LASTEXITCODE -ne 0) { throw '构建失败。' }
     if ($Publish) {
-        $destination = Join-Path $projectRoot 'dist\Framelet'
+        $destination = if ($PublishDirectory) {
+            if ([System.IO.Path]::IsPathRooted($PublishDirectory)) { [System.IO.Path]::GetFullPath($PublishDirectory) }
+            else { [System.IO.Path]::GetFullPath((Join-Path $projectRoot $PublishDirectory)) }
+        } else { Join-Path $projectRoot 'dist\Framelet' }
+        if ((Test-Path -LiteralPath $destination) -and @(Get-ChildItem -LiteralPath $destination -Force).Count -gt 0) {
+            throw '发布目录必须为空，以免混入历史文件。请使用 -PublishDirectory 指定一个新的输出目录。'
+        }
         & $DotnetPath publish $project -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $destination --nologo
         if ($LASTEXITCODE -ne 0) { throw '发布失败。' }
         Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $destination 'README.md')
@@ -52,7 +59,7 @@ try {
         $brandDestination = Join-Path $destination 'brand'
         New-Item -ItemType Directory -Path $brandDestination -Force | Out-Null
         foreach ($asset in @('Framelet.svg', 'Framelet-wordmark.svg', 'Framelet.png', 'Framelet.ico')) {
-            Copy-Item -LiteralPath (Join-Path $projectRoot "src\CaptureReplica\Assets\$asset") -Destination (Join-Path $brandDestination $asset) -Force
+            Copy-Item -LiteralPath (Join-Path $projectRoot "src\Framelet\Assets\$asset") -Destination (Join-Path $brandDestination $asset) -Force
         }
         Write-Output "便携程序：$destination\Framelet.exe"
     }
