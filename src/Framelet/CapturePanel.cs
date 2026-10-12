@@ -34,7 +34,7 @@ public sealed class CapturePanel : Form
     private readonly System.Windows.Forms.Timer dockTimer = new() { Interval = 100 };
     private readonly ToolTip panelTip = new();
     private int Px(int value) => (int)Math.Round(value * DeviceDpi / 96d);
-    private Size ExpandedSize => new(Px(420), Px(208));
+    private Size ExpandedSize => new(Px(408), Px(68));
     public static readonly (CaptureMode Mode, string Name, string Icon, string Shortcut, uint Modifiers)[] Captures =
     [
         (CaptureMode.ActiveWindow, "捕捉活动窗口", "active", "Alt+PrtSc", 1),
@@ -59,41 +59,42 @@ public sealed class CapturePanel : Form
         ShowInTaskbar = true;
         TopMost = settings.TopMost;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(420, 208);
+        ClientSize = new Size(408, 68);
         DoubleBuffered = true;
         Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? SystemIcons.Application;
-        launchStrip = new ToolStrip { Dock = DockStyle.None, Location = new Point(14, 66), AutoSize = false, Size = new Size(392, 58), GripStyle = ToolStripGripStyle.Hidden, ImageScalingSize = new Size(24, 24), Padding = Padding.Empty, BackColor = BrandTheme.Background, Renderer = BrandTheme.CreateToolStripRenderer() };
-        var captureButton = new ToolStripButton("截取区域", PanelIcons.Create("rect", 24, Color.White)) { AccessibleName = "捕捉矩形区域", Tag = CaptureMode.Rectangle, AutoSize = false, Size = new Size(232, 56), Margin = new Padding(0, 0, 8, 0), TextImageRelation = TextImageRelation.ImageBeforeText, BackColor = BrandTheme.Accent, ForeColor = Color.White, Font = new Font(Font.FontFamily, 11F, FontStyle.Bold) };
-        captureButton.Click += async (_, _) => await CaptureAsync(CaptureMode.Rectangle);
-        var recordButton = new ToolStripButton("录制屏幕", PanelIcons.Create("record", 24, BrandTheme.Coral)) { AccessibleName = "屏幕录像机", AutoSize = false, Size = new Size(150, 56), Margin = Padding.Empty, TextImageRelation = TextImageRelation.ImageBeforeText, BackColor = BrandTheme.Surface, ForeColor = BrandTheme.Ink, Font = new Font(Font.FontFamily, 10F), ToolTipText = "录制屏幕 (Ctrl+Shift+F9)" };
-        recordButton.Click += (_, _) => OpenRecorder();
-        launchStrip.Items.AddRange([captureButton, recordButton]);
-        Controls.Add(launchStrip);
-        strip = new ToolStrip { Dock = DockStyle.None, Location = new Point(14, 132), AutoSize = false, Size = new Size(392, 40), GripStyle = ToolStripGripStyle.Hidden, ImageScalingSize = new Size(18, 18), Padding = Padding.Empty, BackColor = BrandTheme.Background, Renderer = BrandTheme.CreateToolStripRenderer() };
-        foreach (var entry in Captures.Where(e => e.Mode is CaptureMode.ActiveWindow or CaptureMode.FullScreen))
+        launchStrip = CreateToolbar(new Point(5, 31), new Size(282, 30));
+        var open = CreateIconMenu("打开图像", "open", "打开图像、从剪贴板打开或新建图像");
+        open.DropDownOpening += (_, _) =>
+        {
+            ClearMenu(open.DropDownItems);
+            open.DropDownItems.Add(new ToolStripMenuItem("打开图像…", PanelIcons.Create("open"), (_, _) => OpenFiles()));
+            open.DropDownItems.Add(new ToolStripMenuItem("从剪贴板打开", PanelIcons.Create("clipboard"), (_, _) => PasteImage()));
+            open.DropDownItems.Add(new ToolStripMenuItem("新建图像…", null, (_, _) => OpenBlank()));
+        };
+        launchStrip.Items.Add(open);
+        launchStrip.Items.Add(new ToolStripSeparator { AutoSize = false, Size = new Size(6, 30), Margin = Padding.Empty });
+        foreach (var entry in Captures)
         {
             var mode = entry.Mode;
-            AddButton(entry.Name, entry.Icon, async () => await CaptureAsync(mode), CaptureShortcut(mode)).Tag = mode;
+            AddButton(launchStrip, entry.Name, entry.Icon, async () => await CaptureAsync(mode), CaptureShortcut(mode)).Tag = mode;
         }
-        var modes = new ToolStripDropDownButton { Text = "更多截图", AutoSize = false, Size = new Size(92, 38), Margin = Padding.Empty, ForeColor = BrandTheme.Ink, AccessibleName = "更多截图方式" };
-        modes.DropDownOpening += (_, _) =>
-        {
-            ClearMenu(modes.DropDownItems);
-            foreach (var entry in Captures.Where(e => e.Mode is not (CaptureMode.ActiveWindow or CaptureMode.FullScreen or CaptureMode.Rectangle)))
-            { var mode = entry.Mode; modes.DropDownItems.Add(new ToolStripMenuItem(entry.Name.Replace("捕捉", ""), PanelIcons.Create(entry.Icon, 18), async (_, _) => await CaptureAsync(mode)) { ShortcutKeyDisplayString = CaptureShortcut(mode) }); }
-        };
-        strip.Items.Add(modes);
-        output = new ToolStripDropDownButton { Image = PanelIcons.Create("editor", 18), Text = "输出", TextImageRelation = TextImageRelation.ImageBeforeText, ToolTipText = "截图输出位置", AutoSize = false, Size = new Size(78, 38), Margin = Padding.Empty, AccessibleName = "输出目标" };
+        Controls.Add(launchStrip);
+        strip = CreateToolbar(new Point(291, 31), new Size(108, 30));
+        var recordButton = AddButton(strip, "屏幕录像机", "record", OpenRecorder, settings.EnableHotkeys ? "Ctrl+Shift+F9" : "", BrandTheme.Coral);
+        recordButton.Tag = "recorder";
+        strip.Items.Add(new ToolStripSeparator { AutoSize = false, Size = new Size(6, 30), Margin = Padding.Empty });
+        output = CreateIconMenu("输出目标", "editor", "截图输出位置与捕捉选项");
         output.DropDownOpening += (_, _) => BuildOutputMenu();
         strip.Items.Add(output);
-        var options = new ToolStripDropDownButton { Image = PanelIcons.Create("settings", 18), Text = "工具", TextImageRelation = TextImageRelation.ImageBeforeText, AutoSize = false, Size = new Size(78, 38), Margin = Padding.Empty, ToolTipText = "设置、打开图像与辅助工具", AccessibleName = "设置和辅助工具" };
+        var options = CreateIconMenu("设置和辅助工具", "settings", "设置、图像与辅助工具");
         options.DropDownOpening += (_, _) => { ClearMenu(options.DropDownItems); foreach (var item in BuildOptionsItems()) options.DropDownItems.Add(item); };
         strip.Items.Add(options);
         Controls.Add(strip);
-        foreach (var entry in new[] { ("−", "收起为图标", 70, (Action)CollapsePanel), ("×", "退出帧简", 38, (Action)RequestExit) })
+        foreach (var entry in new[] { ("−", "收起为图标", 54, (Action)CollapsePanel), ("×", "退出帧简", 30, (Action)RequestExit) })
         {
-            var button = new Button { Text = entry.Item1, AccessibleName = entry.Item2, Bounds = new Rectangle(Width - entry.Item3, 16, 26, 27), TabStop = false, FlatStyle = FlatStyle.Flat, BackColor = BrandTheme.Background, ForeColor = BrandTheme.Muted, Cursor = Cursors.Hand };
+            var button = new Button { Text = entry.Item1, AccessibleName = entry.Item2, Bounds = new Rectangle(Width - entry.Item3, 3, 22, 22), TabStop = false, FlatStyle = FlatStyle.Flat, BackColor = BrandTheme.Background, ForeColor = BrandTheme.Muted, Cursor = Cursors.Hand };
             button.FlatAppearance.BorderSize = 0; button.FlatAppearance.MouseOverBackColor = BrandTheme.AccentPale; button.Click += (_, _) => entry.Item4(); Controls.Add(button);
+            panelTip.SetToolTip(button, entry.Item2);
         }
         tray = new NotifyIcon { Icon = Icon, Text = BrandTheme.Name + " — 双击打开", Visible = true };
         tray.DoubleClick += (_, _) => ShowPanel();
@@ -123,7 +124,7 @@ public sealed class CapturePanel : Form
         MouseDown += (_, e) =>
         {
             if (e.Button == MouseButtons.Right) { trayMenu.Show(this, e.Location); return; }
-            if (e.Button != MouseButtons.Left || (!collapsed && e.Y >= Px(62))) return;
+            if (e.Button != MouseButtons.Left || (!collapsed && e.Y >= Px(28))) return;
             // Use the event position: queued input may already have moved the global cursor.
             dragging = true; dragMoved = false; dragOrigin = PointToScreen(e.Location); dragPosition = Location; Capture = true;
         };
@@ -212,7 +213,7 @@ public sealed class CapturePanel : Form
             if (now - hoverSince.Value >= 250) ExpandPanel();
             return;
         }
-        bool menuOpen = tray.ContextMenuStrip?.Visible == true || strip.Items.OfType<ToolStripDropDownItem>().Any(item => item.DropDown.Visible);
+        bool menuOpen = tray.ContextMenuStrip?.Visible == true || AnyDropDownOpen(strip) || AnyDropDownOpen(launchStrip);
         if (dockEdge == PanelEdge.None || inside || menuOpen) { idleSince = null; return; }
         idleSince ??= now;
         if (now - idleSince.Value >= 700) CollapsePanel();
@@ -237,25 +238,32 @@ public sealed class CapturePanel : Form
         e.Graphics.Clear(BrandTheme.Background);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var line = new Pen(BrandTheme.Border);
-        using var frame = BrandTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), Px(12));
+        using var frame = BrandTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), Px(collapsed ? 12 : 5));
         e.Graphics.DrawPath(line, frame);
         if (collapsed) { e.Graphics.DrawImage(brandMark, new Rectangle(Px(8), Px(8), Px(32), Px(32))); return; }
-        e.Graphics.DrawImage(brandMark, Px(18), Px(15), Px(36), Px(36));
-        using var title = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
-        using var wordmark = new Font("Segoe UI", 7.5F, FontStyle.Bold);
-        using var small = new Font("Microsoft YaHei UI", 8F);
-        TextRenderer.DrawText(e.Graphics, BrandTheme.ShortName, title, new Point(Px(64), Px(10)), BrandTheme.Ink);
-        TextRenderer.DrawText(e.Graphics, BrandTheme.Wordmark, wordmark, new Point(Px(66), Px(34)), BrandTheme.Muted);
-        TextRenderer.DrawText(e.Graphics, "让画面，表达得更简单。", small, new Rectangle(Px(159), Px(16), Px(180), Px(30)), BrandTheme.Muted, TextFormatFlags.VerticalCenter);
-        e.Graphics.DrawLine(line, Px(18), Px(180), Width - Px(18), Px(180));
-        TextRenderer.DrawText(e.Graphics, "拖入图片，即可编辑", small, new Rectangle(Px(18), Px(182), Px(172), Px(24)), BrandTheme.Muted, TextFormatFlags.VerticalCenter);
-        TextRenderer.DrawText(e.Graphics, CaptureShortcut(CaptureMode.Rectangle), small, new Rectangle(Px(207), Px(182), Width - Px(226), Px(24)), BrandTheme.Muted, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+        e.Graphics.DrawImage(brandMark, new Rectangle(Px(8), Px(4), Px(20), Px(20)));
+        using var title = new Font(Font, FontStyle.Bold);
+        TextRenderer.DrawText(e.Graphics, BrandTheme.Name, title, new Rectangle(Px(34), Px(2), Width - Px(96), Px(24)), BrandTheme.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        e.Graphics.DrawLine(line, Px(1), Px(28), Width - Px(2), Px(28));
     }
-    private ToolStripButton AddButton(string label, string icon, Action action, string shortcut = "")
+    private static ToolStrip CreateToolbar(Point location, Size size) => new()
     {
-        string shortName = icon switch { "active" => "窗口", "window" => "对象", "rect" => "区域", "free" => "手绘", "full" => "全屏", "scroll" => "长截图", "fixed" => "固定", "repeat" => "重复", "record" => "录屏", _ => label };
-        var button = new ToolStripButton { Image = PanelIcons.Create(icon, 18), Text = shortName, TextImageRelation = TextImageRelation.ImageBeforeText, DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, AutoSize = false, Size = new Size(70, 38), Margin = Padding.Empty, ForeColor = BrandTheme.Ink, ToolTipText = label + (shortcut.Length > 0 ? " (" + shortcut + ")" : ""), AccessibleName = label };
-        button.Click += (_, _) => action(); strip.Items.Add(button); return button;
+        Dock = DockStyle.None, Location = location, AutoSize = false, Size = size,
+        GripStyle = ToolStripGripStyle.Hidden, CanOverflow = false, ImageScalingSize = new Size(20, 20),
+        Padding = Padding.Empty, Margin = Padding.Empty, BackColor = BrandTheme.Background,
+        Renderer = BrandTheme.CreateToolStripRenderer(), ShowItemToolTips = true
+    };
+    private static ToolStripDropDownButton CreateIconMenu(string label, string icon, string hint) => new()
+    {
+        Image = PanelIcons.Create(icon, 20), Text = label, DisplayStyle = ToolStripItemDisplayStyle.Image,
+        ToolTipText = hint, AccessibleName = label, AutoToolTip = false, AutoSize = false,
+        Size = new Size(36, 30), Padding = Padding.Empty, Margin = Padding.Empty, ForeColor = BrandTheme.Ink
+    };
+    private static bool AnyDropDownOpen(ToolStrip toolbar) => toolbar.Items.OfType<ToolStripDropDownItem>().Any(item => item.DropDown.Visible);
+    private static ToolStripButton AddButton(ToolStrip toolbar, string label, string icon, Action action, string shortcut = "", Color? color = null)
+    {
+        var button = new ToolStripButton { Image = PanelIcons.Create(icon, 20, color), Text = label, DisplayStyle = ToolStripItemDisplayStyle.Image, AutoSize = false, Size = new Size(30, 30), Padding = Padding.Empty, Margin = Padding.Empty, ForeColor = BrandTheme.Ink, ToolTipText = label + (shortcut.Length > 0 ? " (" + shortcut + ")" : ""), AccessibleName = label, AutoToolTip = false };
+        button.Click += (_, _) => action(); toolbar.Items.Add(button); return button;
     }
     private string CaptureShortcut(CaptureMode mode)
     {
@@ -269,6 +277,11 @@ public sealed class CapturePanel : Form
         Invalidate();
         foreach (var button in strip.Items.OfType<ToolStripButton>().Concat(launchStrip.Items.OfType<ToolStripButton>()))
         {
+            if (button.Tag is string command && command == "recorder")
+            {
+                button.ToolTipText = "屏幕录像机" + (settings.EnableHotkeys ? " (Ctrl+Shift+F9)" : "");
+                continue;
+            }
             if (button.Tag is not CaptureMode mode) continue;
             string shortcut = CaptureShortcut(mode);
             button.ToolTipText = button.AccessibleName + (shortcut.Length > 0 ? " (" + shortcut + ")" : "");

@@ -19,6 +19,7 @@ internal static class AppSelfTests
             results.AddRange(FFmpegDiscoveryChecks.Run(output));
             TestFileFormats(output, results);
             results.AddRange(Task.Run(() => NativeRecordingChecks.RunAsync(Path.Combine(output, "native-recording"))).GetAwaiter().GetResult());
+            results.AddRange(Task.Run(RecordingInteractionSelfTests.RunAsync).GetAwaiter().GetResult());
             if (args.Contains("--with-recording"))
             {
                 Task.Run(async () => await ScreenRecordingSession.RunEncodingSelfTestAsync(Path.Combine(output, "recording"))).GetAwaiter().GetResult();

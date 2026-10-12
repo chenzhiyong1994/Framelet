@@ -9,14 +9,15 @@ public static class EditorSelfTests
     {
         Directory.CreateDirectory(directory);
         var results = new List<string>();
-        Check("editor and annotation action labels fit at 100, 150 and 200 percent layout scales", () =>
+        Check("editor, annotation and recorder labels fit at 100, 150 and 200 percent simulated layout scales", () =>
         {
             using var image = new Bitmap(80, 60);
             foreach (float scale in new[] { 1f, 1.5f, 2f })
             {
                 using var editor = new EditorForm(image);
                 using var draw = new DrawForm(image);
-                foreach (var window in new Form[] { editor, draw })
+                using var recorder = new RecorderForm();
+                foreach (var window in new Form[] { editor, draw, recorder })
                 {
                     // Exercise proportional control and text sizing without changing the user's monitor settings.
                     // This is a layout check; real per-monitor DPI transitions still require a display test.
@@ -31,13 +32,128 @@ public static class EditorSelfTests
                             Assert(parent.ClientRectangle.Contains(button.Bounds), $"{button.Text} is clipped by its parent at {scale:P0} layout scale");
                     }
                     foreach (var strip in Descendants(window).OfType<ToolStrip>())
-                        foreach (var item in strip.Items.OfType<ToolStripButton>())
+                        foreach (var item in strip.Items.Cast<ToolStripItem>().Where(item => item is ToolStripButton or ToolStripMenuItem))
                         {
                             var preferred = item.GetPreferredSize(Size.Empty);
                             Assert(item.Width >= preferred.Width && item.Height >= preferred.Height,
                                 $"{item.Text} needs {preferred}, has {item.Size} at {scale:P0} layout scale");
                         }
+                    AssertTextControlsFit(window, $"{scale:P0} simulated layout scale");
                 }
+                AssertEditorStructure(editor);
+                AssertDrawingStructure(draw, scale);
+                AssertRecorderStructure(recorder);
+            }
+        });
+        Check("initial editor, drawing and recorder layouts fit after native window handles are created", () =>
+        {
+            using var image = new Bitmap(80, 60);
+            using var editor = new EditorForm(image);
+            using var draw = new DrawForm(image);
+            using var recorder = new RecorderForm();
+            foreach (var window in new Form[] { editor, draw, recorder })
+            {
+                // Create the real native control handles, including ComboBox/NumericUpDown, without
+                // showing a window, recording the desktop, or changing the monitor's DPI setting.
+                _ = window.Handle;
+                foreach (var control in Descendants(window).ToArray()) _ = control.Handle;
+                LayoutTree(window);
+                Assert(window.IsHandleCreated, "form uses its actual HandleCreated layout");
+                AssertTextControlsFit(window, $"initial native handle at {window.DeviceDpi} DPI");
+            }
+            AssertEditorStructure(editor);
+            AssertDrawingStructure(draw, draw.DeviceDpi / 96f);
+            AssertRecorderStructure(recorder);
+        });
+        Check("recording controls keep stable native-handle layouts across 100 pause and resume cycles", () =>
+        {
+            var recordingBounds = new Rectangle(100, 100, 640, 360);
+            using var controlBar = new RecordingControlBar(recordingBounds);
+            using var countdown = new RecordingCountdown(recordingBounds, 15, true, false);
+            foreach (var window in new Form[] { controlBar, countdown })
+            {
+                _ = window.Handle;
+                foreach (var control in Descendants(window).ToArray()) _ = control.Handle;
+                LayoutTree(window);
+                Assert(window.IsHandleCreated && !window.Visible, "overlay layout tests create hidden native windows without showing them");
+            }
+            var work = Screen.FromRectangle(recordingBounds).WorkingArea;
+            var stateSizes = new Dictionary<RecordingState, Size>();
+            for (int iteration = 0; iteration < 100; iteration++)
+            {
+                foreach (var state in new[] { RecordingState.Recording, RecordingState.Paused, RecordingState.Recording })
+                {
+                    // A constant displayed time isolates accumulating layout growth from changing glyph widths.
+                    controlBar.UpdateState(state, TimeSpan.FromSeconds(12), false, true, true, true);
+                    LayoutTree(controlBar);
+                    var preferred = controlBar.GetPreferredSize(Size.Empty);
+                    Assert(controlBar.Width >= preferred.Width && controlBar.Height >= preferred.Height,
+                        $"{state} control bar must accommodate its complete preferred layout");
+                    Assert(controlBar.Width <= work.Width && controlBar.Height <= work.Height,
+                        $"{state} control bar must remain smaller than the available screen");
+                    if (stateSizes.TryGetValue(state, out var expected))
+                        Equal(expected, controlBar.Size);
+                    else stateSizes.Add(state, controlBar.Size);
+                    var expectedActions = state == RecordingState.Paused ? new[] { "继续", "保存", "丢弃" } : new[] { "暂停", "结束并保存" };
+                    var buttons = Descendants(controlBar).OfType<Button>().ToArray();
+                    foreach (string action in expectedActions)
+                    {
+                        var button = buttons.Single(button => button.Text == action);
+                        Assert(button.Enabled, $"{state} control bar must expose an enabled {action} action");
+                        AssertOverlayControlFits(button, controlBar);
+                    }
+                    foreach (var label in Descendants(controlBar).OfType<Label>()) AssertOverlayControlFits(label, controlBar);
+                }
+            }
+            AssertTextControlsFit(countdown, "hidden countdown native-handle layout");
+            Assert(countdown.CancelButton is Button { DialogResult: DialogResult.Cancel } cancel && cancel.Text == "取消",
+                "countdown must offer a complete cancel action without starting its timer");
+            Assert(Descendants(countdown).OfType<Label>().Any(label => label.Text.Contains("640 × 360")),
+                "countdown must show the selected recording dimensions");
+            Assert(Descendants(countdown).OfType<Label>().Any(label => label.Text.Contains("Esc")),
+                "countdown must explain how to cancel");
+            Assert(!controlBar.Visible && !countdown.Visible && countdown.DialogResult == DialogResult.None,
+                "layout verification must never show overlays or start a recording countdown");
+        });
+        Check("recording selection guidance keeps complete wrapped text at 100, 150 and 200 percent font and padding scales", () =>
+        {
+            string[] instructions =
+            [
+                "按住鼠标左键，拖动框选录制区域\n松开后可确认或重新选择 · Esc / 右键取消",
+                "已选择 3840 × 2160 像素\nEnter / 空格确认 · 方向键移动 · Shift + 方向键调整大小",
+                "区域过小，请重新框选（至少 2 × 2 像素）\n按住鼠标左键拖动 · Esc / 右键取消"
+            ];
+            foreach (float scale in new[] { 1f, 1.5f, 2f })
+            {
+                using var font = new Font("Microsoft YaHei UI", 9F * scale);
+                using var guidance = new RecordingSelectionGuidance
+                {
+                    Font = font,
+                    Padding = new Padding((int)Math.Round(12 * scale), (int)Math.Round(9 * scale),
+                        (int)Math.Round(12 * scale), (int)Math.Round(9 * scale))
+                };
+                // This exercises the production instruction layout without constructing the desktop picker.
+                // Font/padding stress is not a substitute for a real per-monitor DPI transition test.
+                foreach (int availableWidth in new[] { 1920, 320, 200, 1920 })
+                    foreach (string instruction in instructions)
+                    {
+                        guidance.SetMessage(instruction, availableWidth);
+                        LayoutTree(guidance);
+                        var label = guidance.MessageLabel;
+                        Equal(instruction, label.Text);
+                        Assert(!label.AutoEllipsis, "selection guidance must preserve every instruction instead of eliding text");
+                        Assert(guidance.Width > guidance.Padding.Horizontal,
+                            $"selection guidance must have a text area, not collapse to its padding at {scale:P0}");
+                        Assert(guidance.Width <= availableWidth,
+                            $"selection guidance width {guidance.Width} must fit available width {availableWidth} at {scale:P0}");
+                        var preferred = label.GetPreferredSize(new Size(availableWidth - guidance.Padding.Horizontal, 0));
+                        Assert(label.Width >= preferred.Width && label.Height >= preferred.Height,
+                            $"complete selection instruction needs {preferred}, has {label.Size} at {scale:P0} and width {availableWidth}");
+                        var content = new Rectangle(guidance.Padding.Left, guidance.Padding.Top,
+                            guidance.ClientSize.Width - guidance.Padding.Horizontal, guidance.ClientSize.Height - guidance.Padding.Vertical);
+                        Assert(content.Contains(label.Bounds),
+                            $"selection instruction {label.Bounds} must stay inside content area {content} at {scale:P0}");
+                    }
             }
         });
         Check("opening a large screenshot keeps actual size after first layout", () =>
@@ -85,13 +201,10 @@ public static class EditorSelfTests
             Assert(editor.Text.Contains("截图"), "adding a second image selects its tab");
             using var draw = new DrawForm(image);
             Assert(draw.EditedImage.Size == image.Size && !draw.HasChanges, "drawing window starts with an unmodified owned image");
-            foreach (var window in new Form[] { editor, draw })
-            {
-                LayoutTree(window);
-                var header = window.Controls.Find("FrameletHeader", true).Single();
-                foreach (Control child in header.Controls)
-                    Assert(header.ClientRectangle.Contains(child.Bounds), "brand header children remain inside the header");
-            }
+            LayoutTree(editor);
+            LayoutTree(draw);
+            AssertEditorStructure(editor);
+            AssertDrawingStructure(draw, 1);
         });
         Check("drawing actions remain inside the footer without covering options at default and minimum sizes", () =>
         {
@@ -334,6 +447,145 @@ public static class EditorSelfTests
             yield return child;
             foreach (var nested in Descendants(child)) yield return nested;
         }
+    }
+
+    private static void AssertEditorStructure(EditorForm editor)
+    {
+        Assert(editor.Controls.Find("FrameletHeader", true).Length == 0, "editor must not restore a large branding header");
+        var menu = editor.Controls.Find("EditorMenu", true).OfType<MenuStrip>().Single();
+        var toolbar = editor.Controls.Find("EditorToolbar", true).OfType<ToolStrip>().Single();
+        var tabs = editor.Controls.Find("EditorTabs", true).OfType<TabControl>().Single();
+        var status = Descendants(editor).OfType<StatusStrip>().Single();
+        var rowBounds = new[] { menu, toolbar, (Control)tabs, status }.Select(control => BoundsWithin(control, editor)).ToArray();
+        for (int index = 0; index < rowBounds.Length; index++)
+        {
+            Assert(rowBounds[index].Width > 0 && rowBounds[index].Height > 0 && editor.ClientRectangle.Contains(rowBounds[index]),
+                "menu, toolbar, tabs and status must each occupy a complete visible row");
+            if (index > 0) Assert(rowBounds[index - 1].Bottom <= rowBounds[index].Top,
+                "editor menu, toolbar, tabs and status must be ordered and never overlap");
+        }
+        Assert(menu.Items.OfType<ToolStripMenuItem>().Count() >= 7, "common editor menus must remain independently discoverable");
+        Assert(menu.AutoSize && toolbar.AutoSize, "text rows must size to the actual font");
+        foreach (string name in new[] { "open", "save", "select", "zoomIn", "zoomOut", "100", "draw", "crop", "cut", "copy", "paste" })
+        {
+            var action = toolbar.Items.OfType<ToolStripButton>().Single(item => item.Tag as string == name);
+            Assert(action.Available && !string.IsNullOrWhiteSpace(action.AccessibleName) && !string.IsNullOrWhiteSpace(action.ToolTipText),
+                $"{name} must have an available, named toolbar action and a tooltip");
+            Assert(action.DisplayStyle == ToolStripItemDisplayStyle.ImageAndText && action.TextImageRelation == TextImageRelation.ImageAboveText,
+                $"{name} must keep a complete short label below its icon");
+        }
+        foreach (string name in new[] { "save", "copy", "draw", "100" })
+            Assert(toolbar.Items.OfType<ToolStripButton>().Single(item => item.Tag as string == name).Enabled,
+                $"{name} must be usable when a document is open");
+        var page = tabs.SelectedTab!;
+        var canvas = page.Controls.OfType<ImageCanvas>().Single();
+        Assert(page.ClientRectangle.Contains(canvas.Bounds) && canvas.Width > 0 && canvas.Height > 0,
+            "the selected document canvas must remain inside the workspace below the toolbar");
+    }
+
+    private static void AssertDrawingStructure(DrawForm draw, float scale)
+    {
+        Assert(draw.Controls.Find("FrameletHeader", true).Length == 0, "drawing must not restore a large branding header");
+        var palette = draw.Controls.Find("DrawingTools", true).OfType<TableLayoutPanel>().Single();
+        var canvas = Descendants(draw).OfType<ImageCanvas>().Single();
+        var footer = draw.Controls.Find("DrawingFooter", true).Single();
+        var paletteBounds = BoundsWithin(palette, draw);
+        var canvasBounds = BoundsWithin(canvas, draw);
+        var footerBounds = BoundsWithin(footer, draw);
+        Assert(palette.ColumnCount == 2 && palette.Width <= Math.Ceiling(96 * scale), "annotation tools must occupy a narrow two-column palette");
+        Assert(draw.ClientRectangle.Contains(paletteBounds) && draw.ClientRectangle.Contains(canvasBounds) && draw.ClientRectangle.Contains(footerBounds),
+            "drawing palette, canvas and footer must stay inside the window");
+        Assert(paletteBounds.Right <= canvasBounds.Left && paletteBounds.Bottom <= footerBounds.Top && canvasBounds.Bottom <= footerBounds.Top,
+            "annotation tools, canvas and options must not cover one another");
+        var toolTip = typeof(DrawForm).GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .Where(field => field.FieldType == typeof(ToolTip)).Select(field => (ToolTip)field.GetValue(draw)!).Single();
+        foreach (var button in palette.Controls.OfType<Button>())
+        {
+            Assert(button.Text.Length == 0 && button.Image is not null && !string.IsNullOrWhiteSpace(button.AccessibleName),
+                "narrow annotation buttons must use named icons instead of truncated labels");
+            Assert(!string.IsNullOrWhiteSpace(toolTip.GetToolTip(button)), "every annotation icon must have a discoverable tooltip");
+            Assert(palette.ClientRectangle.Contains(button.Bounds), "annotation icon must remain fully inside the palette");
+        }
+        foreach (var tool in new[] { AnnotationTool.Select, AnnotationTool.Arrow, AnnotationTool.Text, AnnotationTool.Number,
+            AnnotationTool.Pen, AnnotationTool.Line, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Highlight, AnnotationTool.Mosaic })
+            Assert(palette.Controls.OfType<Button>().Count(button => button.Tag is AnnotationTool candidate && candidate == tool) == 1,
+                $"daily annotation tool {tool} must remain present exactly once");
+    }
+
+    private static void AssertRecorderStructure(RecorderForm recorder)
+    {
+        var groups = Descendants(recorder).OfType<GroupBox>().ToArray();
+        var capture = groups.Single(group => group.Text == "录制范围");
+        var options = groups.Single(group => group.Text == "录制选项");
+        var captureBounds = BoundsWithin(capture, recorder);
+        var optionBounds = BoundsWithin(options, recorder);
+        Assert(recorder.ClientRectangle.Contains(captureBounds) && recorder.ClientRectangle.Contains(optionBounds),
+            $"recorder groups must fit inside the settings window: window {recorder.ClientRectangle}, capture {captureBounds}, options {optionBounds}");
+        Assert(captureBounds.Bottom <= optionBounds.Top, "capture range must appear above recording options without overlap");
+        var ranges = Descendants(capture).OfType<RadioButton>().OrderBy(button => BoundsWithin(button, capture).Top).ToArray();
+        Equal(2, ranges.Length);
+        Assert(ranges.Any(button => button.Text.Contains("全屏")) && ranges.Any(button => button.Text.Contains("矩形")),
+            "recorder must offer the supported full-screen and rectangle choices");
+        Assert(BoundsWithin(ranges[0], capture).Bottom <= BoundsWithin(ranges[1], capture).Top,
+            "recording range choices must occupy separate vertical rows");
+        var fullScreen = ranges.Single(button => button.Text.Contains("全屏"));
+        var rectangle = ranges.Single(button => button.Text.Contains("矩形"));
+        rectangle.Checked = true;
+        Assert(rectangle.Checked && !fullScreen.Checked, "rectangle and full-screen remain mutually exclusive across nested layout panels");
+        fullScreen.Checked = true;
+        Assert(fullScreen.Checked && !rectangle.Checked, "switching back to full-screen clears the rectangle option");
+        foreach (var group in groups)
+            foreach (var control in Descendants(group).Where(control => control is ButtonBase or Label or ComboBox or NumericUpDown))
+            {
+                var bounds = BoundsWithin(control, group);
+                Assert(group.ClientRectangle.Contains(bounds) && bounds.Top >= group.Font.Height,
+                    $"recording control {control.Text} must stay clear of the group caption and borders");
+            }
+        foreach (var panel in Descendants(recorder).Where(control => control is TableLayoutPanel or FlowLayoutPanel))
+        {
+            var controls = panel.Controls.Cast<Control>().Where(control => control is ButtonBase or Label or ComboBox or NumericUpDown).ToArray();
+            for (int first = 0; first < controls.Length; first++)
+                for (int second = first + 1; second < controls.Length; second++)
+                    Assert(!controls[first].Bounds.IntersectsWith(controls[second].Bounds),
+                        $"recorder controls {controls[first].Text} and {controls[second].Text} must not overlap");
+        }
+        var audio = Descendants(options).OfType<ComboBox>().Single();
+        Assert(audio.SelectedIndex == 0 && audio.SelectedItem?.ToString() == "不录制声音", "initial recording remains ready for native silent MP4");
+        Assert(recorder.AcceptButton is Button { Enabled: true } start && start.Text.Contains("录制"), "initial recorder must expose an enabled start action");
+    }
+
+    private static void AssertOverlayControlFits(Control control, Form window)
+    {
+        var preferred = control.GetPreferredSize(Size.Empty);
+        Assert(control.Width >= preferred.Width && control.Height >= preferred.Height,
+            $"overlay control {control.Text} needs {preferred}, has {control.Size}");
+        Assert(control.Parent is not null && control.Parent.ClientRectangle.Contains(control.Bounds),
+            $"overlay control {control.Text} must stay fully inside its immediate row");
+        Assert(window.ClientRectangle.Contains(BoundsWithin(control, window)),
+            $"overlay control {control.Text} must stay fully inside the control bar");
+    }
+
+    private static void AssertTextControlsFit(Form window, string context)
+    {
+        foreach (var control in Descendants(window).Where(control => control is ButtonBase or Label or ComboBox or NumericUpDown))
+        {
+            if (control is Label { AutoEllipsis: true } || control.Text.Length == 0) continue;
+            var constraint = control is Label ? new Size(control.Width, 0) : Size.Empty;
+            var preferred = control.GetPreferredSize(constraint);
+            Assert(control.Width >= preferred.Width && control.Height >= preferred.Height,
+                $"{window.Text}: {control.Text} needs {preferred}, has {control.Size} after {context}");
+            if (control.Parent is ScrollableControl { AutoScroll: false } parent)
+                Assert(parent.ClientRectangle.Contains(control.Bounds), $"{control.Text} is clipped by its parent after {context}");
+        }
+        foreach (var strip in Descendants(window).OfType<ToolStrip>())
+            foreach (var item in strip.Items.Cast<ToolStripItem>().Where(item => item is ToolStripButton or ToolStripMenuItem))
+            {
+                var preferred = item.GetPreferredSize(Size.Empty);
+                Assert(item.Width >= preferred.Width && item.Height >= preferred.Height,
+                    $"{item.Text} needs {preferred}, has {item.Size} after {context}");
+                if (item.Placement == ToolStripItemPlacement.Main)
+                    Assert(strip.ClientRectangle.Contains(item.Bounds), $"{item.Text} is clipped by its menu or toolbar after {context}");
+            }
     }
 
     private static void LayoutTree(Control control)

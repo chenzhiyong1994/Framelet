@@ -153,6 +153,17 @@ public sealed class ScreenRecordingSession : IAsyncDisposable
     public Task ResumeAsync() => backend.ResumeAsync();
     public Task<string> FinishAsync(string outputPath) => backend.FinishAsync(outputPath);
     public ValueTask DisposeAsync() => backend.DisposeAsync();
+    public async Task DiscardAsync()
+    {
+        await backend.DisposeAsync();
+        // Only this session's generated recovery directory may be removed by an explicit discard.
+        var directory = Path.GetFullPath(RecoveryDirectory);
+        var parent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Framelet"));
+        if (!string.Equals(Path.GetDirectoryName(directory), parent, StringComparison.OrdinalIgnoreCase)
+            || !Regex.IsMatch(Path.GetFileName(directory), "^recording-[0-9a-f]{32}$"))
+            throw new InvalidOperationException("录像临时目录不符合预期，未删除文件。");
+        if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+    }
     public static Task<string[]> RunEncodingSelfTestAsync(string outputDirectory, string? ffmpegPath = null)
         => FFmpegRecordingSession.RunEncodingSelfTestAsync(outputDirectory, ffmpegPath);
 }

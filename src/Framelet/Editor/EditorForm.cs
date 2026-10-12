@@ -30,10 +30,8 @@ public sealed class EditorForm : Form
     private readonly ToolStripMenuItem redoMenu;
     private readonly ToolStripButton cropButton;
     private readonly ToolStripMenuItem cutMenu;
-    private readonly Button copyAction;
-    private readonly Button saveAction;
-    private readonly Label documentTitle;
-    private readonly Label documentSubtitle;
+    private readonly ToolStripButton copyAction;
+    private readonly ToolStripButton saveAction;
     private bool closing;
     private int imageSequence;
 
@@ -51,63 +49,42 @@ public sealed class EditorForm : Form
         BackColor = BrandTheme.Background;
         AllowDrop = true;
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty, Padding = Padding.Empty };
+        var layout = new TableLayoutPanel { Name = "EditorLayout", Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4,
+            Margin = Padding.Empty, Padding = Padding.Empty };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         Controls.Add(layout);
-        var header = new TableLayoutPanel { Name = "FrameletHeader", Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(22, 15, 20, 12), ColumnCount = 3, RowCount = 1, BackColor = BrandTheme.Background };
-        header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 244));
-        var brand = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
-        var mark = BrandTheme.CreateMark(36); icons.Add(mark);
-        brand.Controls.Add(new PictureBox { Image = mark, Size = new Size(36, 36), Location = new Point(0, 5), SizeMode = PictureBoxSizeMode.CenterImage });
-        brand.Controls.Add(new Label { Text = BrandTheme.Wordmark, Font = new Font("Segoe UI", 14, FontStyle.Bold), AutoSize = true, ForeColor = BrandTheme.Ink, Location = new Point(45, 0) });
-        brand.Controls.Add(new Label { Text = "帧简 / 图像工作台", AutoSize = true, ForeColor = BrandTheme.Muted, Location = new Point(47, 30) });
-        header.Controls.Add(brand, 0, 0);
-        var documentInfo = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(10, 0, 10, 0), RowCount = 2, ColumnCount = 1 };
-        documentInfo.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        documentInfo.RowStyles.Add(new RowStyle(SizeType.Percent, 58)); documentInfo.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
-        documentTitle = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = BrandTheme.Ink, Font = new Font("Microsoft YaHei UI", 11, FontStyle.Bold), Margin = Padding.Empty };
-        documentSubtitle = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = BrandTheme.Muted, Margin = Padding.Empty };
-        documentInfo.Controls.Add(documentTitle, 0, 0); documentInfo.Controls.Add(documentSubtitle, 0, 1); header.Controls.Add(documentInfo, 1, 0);
-        var primaryActions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = Padding.Empty, Padding = new Padding(0, 6, 0, 0) };
-        saveAction = new Button { Text = "保存图像", AutoSize = true, MinimumSize = new Size(124, 38), Margin = new Padding(6, 0, 0, 0), TextImageRelation = TextImageRelation.ImageBeforeText };
-        BrandTheme.StyleButton(saveAction, true);
-        var saveIcon = EditorIcons.Make("save", 18, Color.White); icons.Add(saveIcon); saveAction.Image = saveIcon;
-        saveAction.Click += (_, _) => Run(() => SaveCurrent(false));
-        copyAction = new Button { Text = "复制", AutoSize = true, MinimumSize = new Size(100, 38), Margin = new Padding(0, 0, 0, 0), TextImageRelation = TextImageRelation.ImageBeforeText };
-        BrandTheme.StyleButton(copyAction);
-        var copyIcon = EditorIcons.Make("copy", 18); icons.Add(copyIcon); copyAction.Image = copyIcon;
-        copyAction.Click += (_, _) => Run(Copy);
-        primaryActions.Controls.Add(saveAction); primaryActions.Controls.Add(copyAction); header.Controls.Add(primaryActions, 2, 0);
-        layout.Controls.Add(header, 0, 0);
-        menu = new MenuStrip { Dock = DockStyle.Fill, AutoSize = false, BackColor = BrandTheme.Background, ForeColor = BrandTheme.Ink,
-            Padding = new Padding(18, 1, 18, 1), Renderer = BrandTheme.CreateToolStripRenderer() };
+        menu = new MenuStrip { Name = "EditorMenu", Dock = DockStyle.Fill, AutoSize = true, BackColor = BrandTheme.Background,
+            ForeColor = BrandTheme.Ink, Margin = Padding.Empty, Padding = new Padding(4, 2, 4, 2),
+            Renderer = BrandTheme.CreateToolStripRenderer() };
         MainMenuStrip = menu;
-        toolbar = new ToolStrip { Dock = DockStyle.Fill, AutoSize = false, GripStyle = ToolStripGripStyle.Hidden,
-            ImageScalingSize = new Size(19, 19), Padding = new Padding(18, 5, 18, 5), BackColor = BrandTheme.Surface, ForeColor = BrandTheme.Ink, Renderer = BrandTheme.CreateToolStripRenderer() };
-        tabs = new TabControl { Dock = DockStyle.Fill, Margin = new Padding(14, 8, 14, 0), Padding = new Point(22, 8), DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Normal, ItemSize = new Size(180, 32) };
+        toolbar = new ToolStrip { Name = "EditorToolbar", Dock = DockStyle.Fill, AutoSize = true, GripStyle = ToolStripGripStyle.Hidden,
+            CanOverflow = true, ImageScalingSize = new Size(24, 24), Margin = Padding.Empty, Padding = new Padding(4, 3, 4, 3),
+            BackColor = BrandTheme.Surface, ForeColor = BrandTheme.Ink, Renderer = BrandTheme.CreateToolStripRenderer() };
+        tabs = new TabControl { Name = "EditorTabs", Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Point(16, 4),
+            DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Normal, ItemSize = new Size(150, 28) };
         tabs.DrawItem += DrawTab;
         tabs.MouseDown += TabMouseDown;
         tabs.SelectedIndexChanged += (_, _) => UpdateState();
-        var status = new StatusStrip { Dock = DockStyle.Fill, AutoSize = false, SizingGrip = false, BackColor = BrandTheme.Background, ForeColor = BrandTheme.Muted, Padding = new Padding(20, 0, 20, 0), Renderer = BrandTheme.CreateToolStripRenderer() };
-        details = new ToolStripStatusLabel { BorderSides = ToolStripStatusLabelBorderSides.Right, Padding = new Padding(0, 0, 12, 0) };
+        var status = new StatusStrip { Dock = DockStyle.Fill, AutoSize = true, SizingGrip = false, BackColor = BrandTheme.Background,
+            ForeColor = BrandTheme.Muted, Margin = Padding.Empty, Padding = new Padding(6, 1, 6, 1), Renderer = BrandTheme.CreateToolStripRenderer() };
+        details = new ToolStripStatusLabel { BorderSides = ToolStripStatusLabelBorderSides.Right, Padding = new Padding(0, 0, 8, 0) };
         message = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), ForeColor = BrandTheme.Muted };
         zoomStatus = new ToolStripStatusLabel { IsLink = true, LinkColor = BrandTheme.Accent, ActiveLinkColor = BrandTheme.Ink, ToolTipText = "点击恢复实际大小 · Ctrl+0" };
         zoomStatus.Click += (_, _) => { if (Current != null) Current.Canvas.Zoom = 1; };
         status.Items.AddRange([details, message, zoomStatus]);
-        layout.Controls.Add(menu, 0, 1); layout.Controls.Add(toolbar, 0, 2); layout.Controls.Add(tabs, 0, 3); layout.Controls.Add(status, 0, 4);
+        layout.Controls.Add(menu, 0, 0); layout.Controls.Add(toolbar, 0, 1); layout.Controls.Add(tabs, 0, 2); layout.Controls.Add(status, 0, 3);
 
         var file = TopMenu("文件(&F)");
+        var capture = TopMenu("捕捉(&A)");
         var edit = TopMenu("编辑(&E)");
         var imageMenu = TopMenu("图像(&I)");
-        var more = TopMenu("更多(&M)");
+        var view = TopMenu("查看(&V)");
+        var tools = TopMenu("工具(&T)");
+        var help = TopMenu("帮助(&H)");
         Item(file, "打开…", OpenImages, Keys.Control | Keys.O, "open", false);
         Item(file, "从剪贴板新建", Paste, Keys.Control | Keys.V, "paste", false);
         file.DropDownItems.Add(new ToolStripSeparator());
@@ -119,7 +96,6 @@ public sealed class EditorForm : Form
         file.DropDownItems.Add(new ToolStripSeparator());
         Item(file, "关闭当前图像", CloseCurrent, Keys.Control | Keys.W, "close");
         Item(file, "退出编辑器", Close, Keys.Alt | Keys.F4, null, false);
-        var capture = new ToolStripMenuItem("再次捕捉(&A)"); more.DropDownItems.Add(capture);
         foreach (var entry in new (string Text, CaptureMode Mode)[] {
             ("活动窗口", CaptureMode.ActiveWindow), ("窗口 / 对象", CaptureMode.WindowObject),
             ("矩形区域", CaptureMode.Rectangle), ("手绘区域", CaptureMode.Freehand),
@@ -157,7 +133,6 @@ public sealed class EditorForm : Form
         Item(effects, "旋转 180°", () => Current?.Document.Rotate(RotateFlipType.Rotate180FlipNone));
         Item(effects, "水平镜像", () => Current?.Document.Rotate(RotateFlipType.RotateNoneFlipX));
         Item(effects, "垂直镜像", () => Current?.Document.Rotate(RotateFlipType.RotateNoneFlipY));
-        var view = new ToolStripMenuItem("查看与缩放(&V)"); more.DropDownItems.Add(view);
         Item(view, "放大", () => Zoom(1.25f), Keys.Control | Keys.Oemplus, "zoomIn");
         Item(view, "缩小", () => Zoom(.8f), Keys.Control | Keys.OemMinus, "zoomOut");
         Item(view, "实际大小 (100%)", () => { if (Current != null) Current.Canvas.Zoom = 1; }, Keys.Control | Keys.D0, "100");
@@ -165,37 +140,43 @@ public sealed class EditorForm : Form
         var background = new ToolStripMenuItem("工作区背景"); view.DropDownItems.Add(background);
         foreach (var entry in new[] { ("柔雾绿", BrandTheme.Canvas), ("暖白", BrandTheme.Background), ("深墨绿", BrandTheme.Ink) })
             Item(background, entry.Item1, () => { foreach (var tab in images) tab.Canvas.BackColor = entry.Item2; });
-        var tabMenu = new ToolStripMenuItem("图像标签(&B)"); more.DropDownItems.Add(tabMenu);
+        var tabMenu = new ToolStripMenuItem("图像标签(&B)"); view.DropDownItems.Add(tabMenu);
         Item(tabMenu, "下一个图像", () => ChangeTab(1), Keys.Control | Keys.Tab);
         Item(tabMenu, "上一个图像", () => ChangeTab(-1), Keys.Control | Keys.Shift | Keys.Tab);
         Item(tabMenu, "关闭当前图像", CloseCurrent);
         tabMenu.DropDownItems.Add(new ToolStripSeparator());
         Item(tabMenu, "合并已打开图像…", CombineImages);
-        var settings = new ToolStripMenuItem("设置(&S)"); more.DropDownItems.Add(settings);
+        var settings = new ToolStripMenuItem("设置(&S)"); tools.DropDownItems.Add(settings);
         var applicationSettings = Item(settings, "捕捉与输出设置…", () => SettingsRequested?.Invoke(), Keys.None, null, false);
         settings.DropDownOpening += (_, _) => applicationSettings.Enabled = SettingsRequested != null;
-        var help = new ToolStripMenuItem("帮助(&H)"); more.DropDownItems.Add(help);
         Item(help, "编辑器快捷键", ShowHelp, Keys.F1, null, false);
 
-        Button("选择", "select", () => { if (Current != null) { Current.Canvas.Tool = AnnotationTool.Select; Current.Canvas.Focus(); message.Text = "拖动选择区域；选择后可裁剪、复制或马赛克"; } }, "矩形选择");
-        Button("标注", "draw", Draw, "箭头、文字、矩形、画笔、编号、高亮、马赛克 (Ctrl+D)");
-        cropButton = Button("裁剪", "crop", Crop, "裁剪到选区 (Ctrl+R)");
-        Button("尺寸", "resize", ResizeImage, "调整大小 (Ctrl+M)");
-        var additions = new ToolStripDropDownButton("更多处理") { Margin = new Padding(7, 0, 7, 0), ForeColor = BrandTheme.Ink };
-        additions.DropDownItems.Add("添加标题…", null, (_, _) => Run(Caption));
-        additions.DropDownItems.Add("添加边框…", null, (_, _) => Run(Border));
-        additions.DropDownItems.Add("马赛克选区…", null, (_, _) => Run(Mosaic));
-        additions.DropDownItems.Add("合并已打开图像…", null, (_, _) => Run(CombineImages));
-        toolbar.Items.Add(additions); requiresImage.Add(additions);
+        Button("打开", "open", OpenImages, "打开图像 (Ctrl+O)", false);
+        saveAction = Button("保存", "save", () => SaveCurrent(false), "保存图像 (Ctrl+S)");
         Separator();
-        Button("撤销", "undo", () => Current?.Document.Undo(), "撤销 (Ctrl+Z)");
-        Button("重做", "redo", () => Current?.Document.Redo(), "重做 (Ctrl+Y)");
-        var zoomMenu = new ToolStripDropDownButton("缩放") { Alignment = ToolStripItemAlignment.Right, ForeColor = BrandTheme.Ink };
-        zoomMenu.DropDownItems.Add("放大", null, (_, _) => Zoom(1.25f));
-        zoomMenu.DropDownItems.Add("缩小", null, (_, _) => Zoom(.8f));
-        zoomMenu.DropDownItems.Add("实际大小 · 100%", null, (_, _) => { if (Current != null) Current.Canvas.Zoom = 1; });
-        zoomMenu.DropDownItems.Add("适合窗口", null, (_, _) => Current?.Canvas.Fit());
-        toolbar.Items.Add(zoomMenu); requiresImage.Add(zoomMenu);
+        Button("选择", "select", () => { if (Current != null) { Current.Canvas.Tool = AnnotationTool.Select; Current.Canvas.Focus(); message.Text = "拖动选择区域；选择后可裁剪、复制或马赛克"; } }, "矩形选择");
+        Button("放大", "zoomIn", () => Zoom(1.25f), "放大图像 (Ctrl++)");
+        Button("缩小", "zoomOut", () => Zoom(.8f), "缩小图像 (Ctrl+-)");
+        Button("100%", "100", () => { if (Current != null) Current.Canvas.Zoom = 1; }, "实际大小 (Ctrl+0)");
+        Separator();
+        Button("标注", "draw", Draw, "箭头、文字、矩形、画笔、编号、高亮、马赛克 (Ctrl+D)");
+        Button("标题", "caption", Caption, "添加标题");
+        Button("边缘", "border", Border, "添加边缘");
+        Button("大小", "resize", ResizeImage, "调整大小 (Ctrl+M)");
+        Button("马赛克", "mosaic", Mosaic, "马赛克遮挡选区");
+        Separator();
+        cropButton = Button("裁剪", "crop", Crop, "裁剪到选区 (Ctrl+R)");
+        Button("剪切", "cut", Cut, "剪切选区 (Ctrl+X)");
+        copyAction = Button("复制", "copy", Copy, "复制图像或选区 (Ctrl+C)");
+        Button("粘贴", "paste", Paste, "粘贴为新图像 (Ctrl+V)", false);
+        Separator();
+        Button("打印", "print", Print, "打印图像 (Ctrl+P)");
+        Button("PDF", "pdf", ExportPdf, "导出为 PDF");
+        Button("合并", "combine", CombineImages, "合并已打开图像");
+        Button("关闭", "close", CloseCurrent, "关闭当前图像 (Ctrl+W)");
+        // History actions share the menu row and stay visible when the main toolbar overflows.
+        AddHistoryButton("redo", "重做", () => Current?.Document.Redo(), "重做 (Ctrl+Y)");
+        AddHistoryButton("undo", "撤销", () => Current?.Document.Undo(), "撤销 (Ctrl+Z)");
 
         DragEnter += (_, e) => { if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true) e.Effect = DragDropEffects.Copy; };
         DragDrop += (_, e) => { if (e.Data?.GetData(DataFormats.FileDrop) is string[] paths) foreach (var path in paths) OpenPath(path); };
@@ -241,14 +222,25 @@ public sealed class EditorForm : Form
 
     private ToolStripButton Button(string text, string iconName, Action action, string tip, bool needsImage = true)
     {
-        var icon = EditorIcons.Make(iconName, 19); icons.Add(icon);
-        var button = new ToolStripButton(text, icon) { DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, TextImageRelation = TextImageRelation.ImageBeforeText,
-            AutoSize = true, Padding = new Padding(8, 4, 8, 4), Margin = new Padding(1, 0, 1, 0), ToolTipText = tip, Tag = iconName, ForeColor = BrandTheme.Ink };
+        var icon = EditorIcons.Make(iconName, 24); icons.Add(icon);
+        var button = new ToolStripButton(text, icon) { DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, TextImageRelation = TextImageRelation.ImageAboveText,
+            AutoSize = true, Padding = new Padding(6, 2, 6, 2), Margin = new Padding(1, 0, 1, 0), ToolTipText = tip, AccessibleName = text == "100%" ? "实际大小" : text,
+            Tag = iconName, ForeColor = BrandTheme.Ink, Overflow = ToolStripItemOverflow.AsNeeded };
         button.Click += (_, _) => Run(action); toolbar.Items.Add(button);
         if (needsImage) requiresImage.Add(button); return button;
     }
 
-    private void Separator() => toolbar.Items.Add(new ToolStripSeparator { Margin = new Padding(3, 7, 3, 7) });
+    private void AddHistoryButton(string iconName, string text, Action action, string tip)
+    {
+        var icon = EditorIcons.Make(iconName, 16); icons.Add(icon);
+        var item = new ToolStripButton(text, icon) { AutoSize = true, Alignment = ToolStripItemAlignment.Right,
+            DisplayStyle = ToolStripItemDisplayStyle.Image, AccessibleName = text, ToolTipText = tip, Tag = iconName,
+            Padding = new Padding(3, 0, 3, 0) };
+        item.Click += (_, _) => Run(action);
+        menu.Items.Add(item); requiresImage.Add(item);
+    }
+
+    private void Separator() => toolbar.Items.Add(new ToolStripSeparator { Margin = new Padding(2, 4, 2, 4) });
 
     private void UpdateState()
     {
@@ -265,15 +257,16 @@ public sealed class EditorForm : Form
         if (cropButton != null) cropButton.Enabled = current?.Canvas.HasSelection == true;
         if (cutMenu != null) cutMenu.Enabled = current?.Canvas.HasSelection == true;
         copyAction.Enabled = saveAction.Enabled = current != null;
-        foreach (ToolStripItem item in toolbar.Items)
+        foreach (ToolStripItem item in toolbar.Items.Cast<ToolStripItem>().Concat(menu.Items.Cast<ToolStripItem>()))
         {
             if (item.Tag as string == "undo") item.Enabled = current?.Document.CanUndo == true;
             if (item.Tag as string == "redo") item.Enabled = current?.Document.CanRedo == true;
+            if (item.Tag as string == "cut") item.Enabled = current?.Canvas.HasSelection == true;
         }
         if (current == null)
         {
             details.Text = "没有图像"; zoomStatus.Text = ""; message.Text = "打开文件或粘贴剪贴板图像";
-            documentTitle.Text = "准备开始"; documentSubtitle.Text = "打开、粘贴或捕捉一张图像"; return;
+            Text = BrandTheme.Name + " · 图像编辑器"; return;
         }
         var image = current.Document.Image;
         details.Text = $"{image.Width:N0} × {image.Height:N0} 像素";
@@ -281,9 +274,6 @@ public sealed class EditorForm : Form
         message.Text = current.Canvas.HasSelection
             ? $"选区 {current.Canvas.Selection.Width} × {current.Canvas.Selection.Height}    ·    可裁剪、复制或添加马赛克"
             : "拖动选择区域；Ctrl + 滚轮缩放，中键拖动平移";
-        documentTitle.Text = current.Document.FilePath is null ? current.Name : Path.GetFileName(current.Document.FilePath);
-        documentSubtitle.Text = (current.Document.IsDirty ? "未保存的更改" : "已保存") + $"  ·  {images.Count} 张图像";
-        documentSubtitle.ForeColor = current.Document.IsDirty ? BrandTheme.Accent : BrandTheme.Muted;
         Text = $"{current.Page.Text} — {BrandTheme.Name}";
     }
 

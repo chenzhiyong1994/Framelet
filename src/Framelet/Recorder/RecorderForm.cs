@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Framelet;
 
-public sealed class RecorderForm : Form
+public sealed partial class RecorderForm : Form
 {
     private readonly RadioButton fullScreen = new() { Text = "全屏", Checked = true, AutoSize = true };
     private readonly RadioButton region = new() { Text = "矩形区域", AutoSize = true };
@@ -22,11 +22,12 @@ public sealed class RecorderForm : Form
     private readonly Label status = new() { Text = "就绪 · 可直接录制", AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Label elapsed = new() { Text = "00:00:00", TextAlign = ContentAlignment.MiddleRight };
     private readonly Label hints = new() { Text = "保存为 MP4。Ctrl+F10 暂停/继续，Ctrl+F11 结束。", AutoSize = false };
-    private readonly Panel captureGroup = new();
-    private readonly Panel optionsGroup = new();
+    private readonly GroupBox captureGroup = new();
+    private readonly GroupBox optionsGroup = new();
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 250 };
     private readonly ToolTip toolTip = new();
-    private Image? brandMark;
+    private RecordingControlBar? controlBar;
+    private RecordingBoundary? boundary;
     private Rectangle? selectedBounds;
     private ScreenRecordingSession? session;
     private string? lastSavedVideo;
@@ -45,15 +46,10 @@ public sealed class RecorderForm : Form
 
     public RecorderForm(Rectangle? initialBounds)
     {
-        BrandTheme.Apply(this);
-        Text = BrandTheme.Name + " · 屏幕录像";
-        ClientSize = new Size(620, 582);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        StartPosition = FormStartPosition.CenterScreen;
-        ShowInTaskbar = true;
+        SuspendLayout();
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
+        BrandTheme.Apply(this);
         preferences = RecorderPreferences.Load();
         frameRate.Value = Math.Clamp(preferences.FramesPerSecond, 1, 60);
         includeCursor.Checked = preferences.IncludeCursor;
@@ -61,68 +57,10 @@ public sealed class RecorderForm : Form
         selectedBounds = initialBounds;
         if (initialBounds is not null) region.Checked = true;
 
-        brandMark = BrandTheme.CreateMark(42);
-        var mark = new PictureBox { Image = brandMark, SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(22, 28, 42, 42) };
-        var wordmark = new Label { Text = BrandTheme.Wordmark, Font = new Font("Segoe UI", 9F, FontStyle.Bold), ForeColor = BrandTheme.Accent, Bounds = new Rectangle(78, 20, 180, 23) };
-        var title = new Label { Text = "屏幕录像", Font = new Font(Font.FontFamily, 19F, FontStyle.Bold), ForeColor = BrandTheme.Ink, Bounds = new Rectangle(76, 44, 260, 36) };
-        editButton.SetBounds(466, 35, 134, 36);
-        captureGroup.SetBounds(20, 100, 580, 112);
-        StyleCard(captureGroup);
-        var captureTitle = SectionLabel("录制范围", 18, 13);
-        fullScreen.Text = "整个主屏幕";
-        fullScreen.Location = new Point(18, 48);
-        region.Location = new Point(168, 48);
-        selectArea.SetBounds(432, 40, 130, 34);
-        areaLabel.SetBounds(18, 80, 544, 23);
-        areaLabel.ForeColor = BrandTheme.Muted;
-        areaLabel.Font = new Font(Font.FontFamily, 8.5F);
-        areaLabel.AutoEllipsis = true;
-        captureGroup.Controls.AddRange([captureTitle, fullScreen, region, selectArea, areaLabel]);
-        optionsGroup.SetBounds(20, 224, 580, 174);
-        StyleCard(optionsGroup);
-        var optionsTitle = SectionLabel("录制选项", 18, 13);
-        var fpsLabel = new Label { Text = "帧率", Bounds = new Rectangle(18, 53, 50, 25), TextAlign = ContentAlignment.MiddleLeft };
-        frameRate.SetBounds(80, 49, 70, 30);
-        frameRate.BorderStyle = BorderStyle.FixedSingle;
-        var fpsUnit = new Label { Text = "帧 / 秒", ForeColor = BrandTheme.Muted, Bounds = new Rectangle(162, 53, 70, 25) };
-        includeCursor.Location = new Point(286, 53);
-        var audioLabel = new Label { Text = "声音", Bounds = new Rectangle(18, 94, 50, 25), TextAlign = ContentAlignment.MiddleLeft };
-        audioDevice.SetBounds(80, 89, 352, 30);
-        audioDevice.FlatStyle = FlatStyle.Flat;
-        audioDevice.BackColor = BrandTheme.Background;
-        audioDevice.Items.Add("不录制声音");
-        audioDevice.SelectedIndex = 0;
-        extensionButton.SetBounds(444, 87, 118, 32);
-        minimize.Location = new Point(18, 136);
-        optionsGroup.Controls.AddRange([optionsTitle, fpsLabel, frameRate, fpsUnit, includeCursor, audioLabel, audioDevice, extensionButton, minimize]);
-        var recordingStatus = new Panel { Bounds = new Rectangle(20, 414, 580, 62), BackColor = BrandTheme.AccentPale };
-        status.SetBounds(16, 18, 386, 26);
-        status.ForeColor = BrandTheme.Accent;
-        elapsed.SetBounds(430, 13, 132, 34);
-        elapsed.ForeColor = BrandTheme.Ink;
-        elapsed.Font = new Font("Consolas", 18F, FontStyle.Bold);
-        recordingStatus.Controls.AddRange([status, elapsed]);
-        startButton.Text = "●  开始录制";
-        startButton.SetBounds(20, 492, 146, 40);
-        pauseButton.SetBounds(176, 492, 112, 40);
-        stopButton.SetBounds(298, 492, 112, 40);
-        closeButton.SetBounds(504, 492, 96, 40);
-        foreach (var button in new[] { selectArea, extensionButton, editButton, pauseButton, stopButton, closeButton }) BrandTheme.StyleButton(button);
-        BrandTheme.StyleButton(startButton, true);
-        startButton.BackColor = BrandTheme.Coral;
-        startButton.ForeColor = BrandTheme.Ink;
-        startButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(233, 142, 123);
-        hints.Text = "Ctrl+F10 暂停/继续  ·  Ctrl+F11 结束  ·  保存为 MP4";
-        hints.SetBounds(20, 544, 580, 32);
-        hints.Font = new Font(Font.FontFamily, 8.5F);
-        hints.ForeColor = BrandTheme.Muted;
-        Controls.AddRange([mark, wordmark, title, editButton, captureGroup, optionsGroup, recordingStatus, startButton, pauseButton, stopButton, closeButton, hints]);
-        toolTip.SetToolTip(audioDevice, "默认录制无声视频，可直接开始。需要录音时，点击“扩展录音”选择声音设备。");
-        toolTip.SetToolTip(minimize, "可从任务栏恢复录像机；也可用 Ctrl+F10 暂停/继续、Ctrl+F11 结束。");
-        toolTip.SetToolTip(extensionButton, "配置可选的声音采集。无声录屏无需配置。");
-        toolTip.SetToolTip(editButton, "打开可选的视频首尾裁剪与格式转换。");
-        fullScreen.CheckedChanged += (_, _) => RefreshArea();
-        region.CheckedChanged += (_, _) => RefreshArea();
+        BuildRecorderLayout();
+        fullScreen.CheckedChanged += (_, _) => { if (fullScreen.Checked) region.Checked = false; RefreshArea(); };
+        region.CheckedChanged += (_, _) => { if (region.Checked) fullScreen.Checked = false; RefreshArea(); };
+        fullScreen.Checked = !region.Checked;
         selectArea.Click += async (_, _) => await SelectRegionAsync();
         extensionButton.Click += async (_, _) => await ConfigureAudioAsync();
         audioDevice.SelectedIndexChanged += (_, _) => RefreshReadyStatus();
@@ -138,18 +76,9 @@ public sealed class RecorderForm : Form
         timer.Tick += async (_, _) => await OnTimerAsync();
         FormClosing += OnClosing;
         RefreshArea();
-    }
-
-    private Label SectionLabel(string text, int x, int y) => new()
-    {
-        Text = text, Bounds = new Rectangle(x, y, 220, 26), ForeColor = BrandTheme.Ink,
-        Font = new Font(Font.FontFamily, 10F, FontStyle.Bold)
-    };
-
-    private static void StyleCard(Panel panel)
-    {
-        panel.BackColor = BrandTheme.Surface;
-        panel.Paint += (_, e) => { using var pen = new Pen(BrandTheme.Border); e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1); };
+        SetButtons();
+        ResumeLayout(true);
+        Size = GetPreferredSize(Size.Empty);
     }
 
     private void RefreshArea()
@@ -274,14 +203,28 @@ public sealed class RecorderForm : Form
             preferences.IncludeCursor = includeCursor.Checked;
             preferences.MinimizeOnStart = minimize.Checked;
             preferences.Save();
+            Hide();
+            using (var countdown = new RecordingCountdown(bounds, (int)frameRate.Value, includeCursor.Checked, selectedAudio is not null))
+            {
+                if (countdown.ShowDialog() != DialogResult.OK)
+                {
+                    ShowSettings();
+                    return;
+                }
+            }
+            // Wait for the countdown's closing animation before taking the first frame.
+            await Task.Delay(250);
+            DwmFlush();
+            RecordingOverlayProtection.Exclude(this);
             session = new ScreenRecordingSession(new RecordingOptions(bounds, (int)frameRate.Value,
                 includeCursor.Checked, selectedAudio, selectedAudio is null ? null : resolvedEngine));
             status.Text = "正在准备录像…";
             RegisterRecordingHotkeys();
-            if (minimize.Checked) WindowState = FormWindowState.Minimized;
+            ShowRecordingOverlays(bounds);
             await session.StartAsync();
             status.Text = "●  正在录像";
             timer.Start();
+            if (!minimize.Checked) ShowSettings();
         }
         catch (Exception ex) { await ReportFailureAsync(ex); }
         finally { busy = false; SetButtons(); }
@@ -298,11 +241,13 @@ public sealed class RecorderForm : Form
             {
                 status.Text = "正在暂停…";
                 await session.PauseAsync();
+                RestoreOverlayCapture();
                 status.Text = "Ⅱ  已暂停";
             }
             else if (session.State == RecordingState.Paused && session.CanResume)
             {
                 status.Text = "正在继续…";
+                ProtectOverlayCapture();
                 await session.ResumeAsync();
                 status.Text = "●  正在录像";
                 timer.Start();
@@ -320,8 +265,10 @@ public sealed class RecorderForm : Form
         try
         {
             if (session.State == RecordingState.Recording) await session.PauseAsync();
-            WindowState = FormWindowState.Normal;
-            Activate();
+            RestoreOverlayCapture();
+            UpdateRecordingOverlays();
+            controlBar?.Hide();
+            ShowSettings();
             status.Text = "Ⅱ  已暂停 · 请选择保存位置";
             using var dialog = new SaveFileDialog
             {
@@ -346,11 +293,98 @@ public sealed class RecorderForm : Form
             preferences.LastDirectory = Path.GetDirectoryName(output);
             preferences.Save();
             timer.Stop();
+            CloseRecordingOverlays();
             status.Text = "已保存：" + Path.GetFileName(output);
             toolTip.SetToolTip(status, output);
             MessageBox.Show(this, "录像已保存：\n" + output, "屏幕录像机", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex) { await ReportFailureAsync(ex, retrySaving: true); }
+        finally
+        {
+            busy = false;
+            if (session?.State == RecordingState.Paused && controlBar is not null)
+            {
+                controlBar.Show();
+                controlBar.Activate();
+            }
+            SetButtons();
+        }
+    }
+
+    private void ShowRecordingOverlays(Rectangle bounds)
+    {
+        CloseRecordingOverlays();
+        boundary = new RecordingBoundary(bounds);
+        controlBar = new RecordingControlBar(bounds);
+        controlBar.PauseRequested += () => _ = TogglePauseAsync();
+        controlBar.SaveRequested += () => _ = FinishRecordingAsync();
+        controlBar.DiscardRequested += () => _ = DiscardRecordingAsync();
+        // Protect both HWNDs synchronously: Shown is queued and can run after the first capture.
+        RecordingOverlayProtection.Exclude(this);
+        RecordingOverlayProtection.Exclude(boundary);
+        RecordingOverlayProtection.Exclude(controlBar);
+        boundary.Show();
+        controlBar.Show();
+        DwmFlush();
+    }
+
+    private void UpdateRecordingOverlays()
+    {
+        if (session is null) return;
+        controlBar?.UpdateState(session.State, session.RecordedTime, busy, session.CanResume, hotkeyPause, hotkeyStop);
+        boundary?.SetPaused(session.State != RecordingState.Recording);
+    }
+
+    private void CloseRecordingOverlays()
+    {
+        controlBar?.Dispose();
+        boundary?.Dispose();
+        controlBar = null;
+        boundary = null;
+        RecordingOverlayProtection.Restore(this);
+    }
+
+    private void ProtectOverlayCapture()
+    {
+        RecordingOverlayProtection.Exclude(this);
+        if (controlBar is not null) RecordingOverlayProtection.Exclude(controlBar);
+        if (boundary is not null) RecordingOverlayProtection.Exclude(boundary);
+        DwmFlush();
+    }
+
+    private void RestoreOverlayCapture()
+    {
+        RecordingOverlayProtection.Restore(this);
+        if (controlBar is not null) RecordingOverlayProtection.Restore(controlBar);
+        if (boundary is not null) RecordingOverlayProtection.Restore(boundary);
+    }
+
+    private void ShowSettings()
+    {
+        Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
+    }
+
+    private async Task DiscardRecordingAsync()
+    {
+        if (busy || session?.State != RecordingState.Paused) return;
+        busy = true;
+        SetButtons();
+        try
+        {
+            if (MessageBox.Show(controlBar ?? (IWin32Window)this, "丢弃本次录像？尚未保存的画面将被删除。", "丢弃录像",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            await session.DiscardAsync();
+            session = null;
+            timer.Stop();
+            UnregisterRecordingHotkeys();
+            CloseRecordingOverlays();
+            ShowSettings();
+            elapsed.Text = "00:00:00";
+            status.Text = "已丢弃本次录像 · 可以重新录制";
+        }
+        catch (Exception ex) { await ReportFailureAsync(ex); }
         finally { busy = false; SetButtons(); }
     }
 
@@ -359,6 +393,7 @@ public sealed class RecorderForm : Form
         if (session is null) return;
         var duration = session.RecordedTime;
         elapsed.Text = $"{(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}";
+        UpdateRecordingOverlays();
         if (!busy && session.EncoderExited)
         {
             busy = true;
@@ -372,11 +407,11 @@ public sealed class RecorderForm : Form
     {
         timer.Stop();
         UnregisterRecordingHotkeys();
-        WindowState = FormWindowState.Normal;
-        Activate();
+        ShowSettings();
         var message = exception.Message;
         if (retrySaving && session?.State == RecordingState.Paused && !session.EncoderExited)
         {
+            RestoreOverlayCapture();
             status.Text = "录像已保留 · 可重新选择位置保存";
             toolTip.SetToolTip(status, "点击“结束”重新选择保存位置。\n" + exception.Message);
             RegisterRecordingHotkeys();
@@ -386,11 +421,13 @@ public sealed class RecorderForm : Form
             return;
         }
         status.Text = "录像失败 · " + exception.Message.Split('\n')[0];
+        CloseRecordingOverlays();
         if (session is not null)
         {
             await session.DisposeAsync();
             if (Directory.Exists(session.RecoveryDirectory) && Directory.EnumerateFiles(session.RecoveryDirectory).Any())
                 message += "\n\n已保留录像片段，可用于恢复：\n" + session.RecoveryDirectory;
+            session = null;
         }
         MessageBox.Show(this, message, "录像未完成", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
@@ -406,6 +443,9 @@ public sealed class RecorderForm : Form
         stopButton.Enabled = !busy && session?.State is RecordingState.Recording or RecordingState.Paused;
         closeButton.Enabled = !busy && !checkingEngine && !selectingRegion;
         pauseButton.Text = session?.State == RecordingState.Paused ? "▶  继续" : "Ⅱ  暂停";
+        var actions = Controls.Find("RecorderSessionActions", true).FirstOrDefault();
+        if (actions is not null) actions.Visible = active;
+        UpdateRecordingOverlays();
     }
 
     private async void OnClosing(object? sender, FormClosingEventArgs e)
@@ -416,7 +456,7 @@ public sealed class RecorderForm : Form
         {
             e.Cancel = true;
             await FinishRecordingAsync();
-            if (session.State != RecordingState.Finished) return;
+            if (session?.State != RecordingState.Finished) return;
         }
         timer.Stop();
         UnregisterRecordingHotkeys();
@@ -433,7 +473,7 @@ public sealed class RecorderForm : Form
     {
         hotkeyPause = RegisterHotKey(Handle, PauseHotkeyId, 0x4002, (int)Keys.F10);
         hotkeyStop = RegisterHotKey(Handle, StopHotkeyId, 0x4002, (int)Keys.F11);
-        hints.Text = hotkeyPause && hotkeyStop ? "Ctrl+F10 暂停/继续，Ctrl+F11 结束。可从任务栏恢复窗口。" : "快捷键被其他程序占用；请从任务栏恢复窗口操作。";
+        hints.Text = hotkeyPause && hotkeyStop ? "Ctrl+F10 暂停/继续 · Ctrl+F11 结束并保存" : "快捷键被其他程序占用；请使用录制控制条上的按钮。";
     }
     private void UnregisterRecordingHotkeys()
     {
@@ -452,7 +492,7 @@ public sealed class RecorderForm : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { timer.Dispose(); toolTip.Dispose(); brandMark?.Dispose(); }
+        if (disposing) { timer.Dispose(); toolTip.Dispose(); CloseRecordingOverlays(); }
         base.Dispose(disposing);
     }
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, int key);
@@ -482,71 +522,5 @@ internal sealed class RecorderPreferences
             File.WriteAllText(ConfigPath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Recording is still usable if settings cannot be saved. */ }
-    }
-}
-
-internal sealed class RecordingRegionPicker : Form
-{
-    private readonly Bitmap desktop;
-    private Point anchor;
-    private Rectangle selection;
-    private bool selecting;
-    public Rectangle SelectedBounds => new(selection.X + Bounds.X, selection.Y + Bounds.Y, selection.Width, selection.Height);
-
-    public RecordingRegionPicker()
-    {
-        Bounds = SystemInformation.VirtualScreen;
-        StartPosition = FormStartPosition.Manual;
-        FormBorderStyle = FormBorderStyle.None;
-        Text = BrandTheme.Name + " · 选择录像区域";
-        ShowInTaskbar = true;
-        TopMost = true;
-        DoubleBuffered = true;
-        KeyPreview = true;
-        Cursor = Cursors.Cross;
-        desktop = new Bitmap(Bounds.Width, Bounds.Height);
-        using (var graphics = Graphics.FromImage(desktop)) graphics.CopyFromScreen(Bounds.Location, Point.Empty, Bounds.Size);
-        MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) { anchor = e.Location; selecting = true; Capture = true; } };
-        MouseMove += (_, e) =>
-        {
-            if (!selecting) return;
-            var x = Math.Clamp(e.X, 0, ClientSize.Width);
-            var y = Math.Clamp(e.Y, 0, ClientSize.Height);
-            selection = Rectangle.FromLTRB(Math.Min(anchor.X, x), Math.Min(anchor.Y, y), Math.Max(anchor.X, x), Math.Max(anchor.Y, y));
-            Invalidate();
-        };
-        MouseUp += (_, e) =>
-        {
-            if (e.Button == MouseButtons.Right) { DialogResult = DialogResult.Cancel; return; }
-            if (!selecting) return;
-            selecting = false;
-            Capture = false;
-            if (selection.Width >= 2 && selection.Height >= 2) DialogResult = DialogResult.OK;
-        };
-        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) DialogResult = DialogResult.Cancel; };
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        e.Graphics.DrawImageUnscaled(desktop, 0, 0);
-        using var shade = new SolidBrush(Color.FromArgb(100, 0, 0, 0));
-        e.Graphics.FillRectangle(shade, ClientRectangle);
-        if (!selection.IsEmpty)
-        {
-            e.Graphics.DrawImage(desktop, selection, selection, GraphicsUnit.Pixel);
-            using var border = new Pen(BrandTheme.Accent, 2);
-            e.Graphics.DrawRectangle(border, selection);
-        }
-        var label = selection.IsEmpty ? "拖动鼠标选择录像区域 · Esc / 右键取消" : $"{selection.Width} × {selection.Height} · 松开鼠标确定 · Esc 取消";
-        var size = TextRenderer.MeasureText(label, Font);
-        var location = selection.IsEmpty ? new Point(24, 24) : new Point(Math.Clamp(selection.X, 0, Math.Max(0, ClientSize.Width - size.Width - 14)), Math.Max(0, selection.Y - 30));
-        using var labelBackground = new SolidBrush(BrandTheme.Ink);
-        e.Graphics.FillRectangle(labelBackground, new Rectangle(location, new Size(size.Width + 12, 28)));
-        TextRenderer.DrawText(e.Graphics, label, Font, new Point(location.X + 6, location.Y + 5), Color.White);
-    }
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing) desktop.Dispose();
-        base.Dispose(disposing);
     }
 }
