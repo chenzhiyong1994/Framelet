@@ -1,122 +1,111 @@
-# 帧简 Framelet 0.5.0
+<p align="center">
+  <img src="https://raw.githubusercontent.com/chenzhiyong1994/Framelet/main/src/Framelet/Assets/Framelet.svg" width="76" height="76" alt="Framelet 标志">
+</p>
 
-**让画面，表达得更简单。** 帧简 Framelet 是面向日常高频场景的 Windows 截图、标注与录屏工具。截图、画箭头、遮住敏感信息，随后复制或保存；需要演示时，录制一段屏幕并裁掉首尾。
+<h1 align="center">帧简 Framelet</h1>
 
-[下载 Windows x64 便携版](https://github.com/chenzhiyong1994/Framelet/releases/latest) · [从源码构建](#从源码构建与验证) · [功能边界](docs/features.md)
+<p align="center">
+  <strong>让画面，表达得更简单。</strong><br>
+  Windows 截图、标注与录屏工具 · Capture. Annotate. Share.
+</p>
 
-![帧简 Framelet 截图与录屏工具栏](docs/images/framelet-panel.jpg)
+<p align="center">
+  <a href="https://github.com/chenzhiyong1994/Framelet/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/chenzhiyong1994/Framelet?label=release&amp;color=147D70"></a>
+  <img alt="Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-1C302E">
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-147D70"></a>
+</p>
 
-![帧简 Framelet 图像编辑器](docs/images/framelet-editor.jpg)
+<p align="center">
+  <a href="https://github.com/chenzhiyong1994/Framelet/releases/latest"><strong>下载便携版</strong></a>
+  &nbsp; · &nbsp;
+  <a href="https://chenzhiyong1994.github.io/Framelet/">项目主页</a>
+  &nbsp; · &nbsp;
+  <a href="docs/usage.md">使用指南</a>
+  &nbsp; · &nbsp;
+  <a href="docs/features.md">功能说明</a>
+</p>
 
-![录屏设置](docs/images/framelet-recorder.png)
+<br>
 
-![暂停后的录制控制条](docs/images/framelet-recording-controls.png)
+![Framelet 图像编辑器：菜单、工具栏与画布分区，默认以实际大小查看图像](docs/images/framelet-editor.jpg)
+
+<p align="center"><sub>截取一个画面，加上清楚的标注，复制或保存。需要演示时，再录一段屏幕。</sub></p>
+
+## 三件日常小事，顺手完成
+
+| 截取画面 | 说明重点 | 录下过程 |
+| :--- | :--- | :--- |
+| 区域、窗口、全屏截图，快捷键随时唤起。紧凑浮窗贴边自动收起。 | 箭头、文字、序号、高亮与马赛克；裁剪、调整尺寸后复制或保存。 | 全屏或区域录制，倒计时、计时与控制条清晰可见。暂停、继续，保存 MP4。 |
+
+**无声录屏开箱即用。** 使用 Windows 原生媒体能力，无需安装 FFmpeg、无需选择工具路径。录音与视频首尾剪辑是可选扩展，才需要另行配置 FFmpeg。
+
+## 开始使用
+
+1. 在 [Releases](https://github.com/chenzhiyong1994/Framelet/releases/latest) 下载 Windows x64 ZIP 便携包。
+2. 解压后打开 `Framelet.exe`；包内包含 .NET 运行时，无需另装 .NET。
+3. 按 `Ctrl+PrtSc` 截取区域，或点击浮窗上的录像图标开始录屏。
+
+截图和标注默认保持 **实际大小 · 100%**。大图可滚动浏览，也能手动切换“适合窗口”。Windows 需具备媒体组件，缺少媒体功能的系统版本需先补齐对应组件。
+
+<table>
+  <tr>
+    <td width="52%" valign="top">
+      <h3>小浮窗，随时在手边</h3>
+      <p>常用入口集中在一行。拖到屏幕边缘后自动收为小图标，悬停或点击展开。</p>
+      <img src="docs/images/framelet-panel.jpg" width="413" alt="Framelet 紧凑截图与录屏工具栏">
+      <h3>录制中，也能从容控制</h3>
+      <p>计时、暂停与结束常驻。暂停后可继续、保存或丢弃；取消保存也能接着录。</p>
+      <img src="docs/images/framelet-recording-controls.png" width="365" alt="录制暂停后的控制条：继续录制、保存与丢弃">
+    </td>
+    <td width="48%" valign="top">
+      <h3>范围与选项，一眼看清</h3>
+      <p>选区支持拖动与四角调整。确认后，3 秒倒计时为演示留出准备时间。</p>
+      <img src="docs/images/framelet-recorder.png" width="394" alt="Framelet 录屏设置：录制范围、帧率、声音与鼠标选项">
+    </td>
+  </tr>
+</table>
+
+## 常用快捷键
+
+| 操作 | 默认快捷键 |
+| :--- | :--- |
+| 截取矩形区域 | `Ctrl+PrtSc` |
+| 截取活动窗口 / 全屏 | `Alt+PrtSc` / `PrtSc` |
+| 显示工具栏 | `Ctrl+Shift+F12` |
+| 打开录像机 | `Ctrl+Shift+F9` |
+| 录像暂停 / 继续 | `Ctrl+F10` |
+| 结束录像 | `Ctrl+F11` |
+
+截图快捷键冲突时可在设置中切换数字组合；录屏快捷键冲突时可使用控制条按钮。[全部快捷键与长截图用法 →](docs/usage.md#快捷键)
 
 ## 产品范围
 
-主要功能：
+Framelet 聚焦日常截图、像素标注、本地输出与基础录屏。支持 PNG、JPEG、BMP、GIF、TIFF 和单页 PDF 导出；GIF/TIFF 只编辑首帧或首页，标注提交为像素并支持会话内撤销。
 
-- 截取区域、窗口或全屏，支持快捷键唤起和取消。
-- 添加箭头、文字、序号、高亮与马赛克，完成裁剪、尺寸调整和撤销/重做。
-- 复制图像用于粘贴，或保存为常用图片格式；保存失败时保留原文件和当前编辑。
-- 直接录制屏幕或指定区域，暂停/继续并保存无声 MP4；可通过扩展功能录音或裁掉视频首尾。
+长截图采用手动滚动采集；录音需要可选 FFmpeg，真实音频录制尚未验证。当前不包含专用扬声器回环、摄像头叠加、Office/FTP 集成、扫描仪、复杂视频特效或完整矢量对象编辑。真实混合 DPI 多屏仍需现场验证。
 
-当前聚焦常用操作的步骤、响应速度、稳定性和清晰反馈。Office/FTP 集成、扫描仪、复杂视频特效及完整矢量对象编辑不属于当前产品范围。实现状态与已验证范围分别见[功能说明](docs/features.md)和[验证记录](docs/validation.md)。
-
-## 直接运行
-
-从 [Releases](https://github.com/chenzhiyong1994/Framelet/releases/latest) 下载并解压 Windows x64 便携包，打开 `Framelet.exe`。发布包包含 .NET 运行时，无需另装 .NET。全屏/区域无声录屏、暂停/继续和 MP4 保存使用 Windows 原生媒体能力，无需安装 FFmpeg 或选择工具路径。
-
-- 主工具栏采用小标题和单行图标。打开图像、各类截图、录屏、输出和设置入口常驻；鼠标停在图标上会显示完整名称与快捷键。点击矩形图标截取区域，截图可送到编辑器、剪贴板、文件或打印机。
-- 拖动主面板标题栏靠近屏幕边缘会自动吸附；鼠标离开后收成小图标，悬停或点击展开，拖离边缘可恢复自由悬浮。底边会避开任务栏，贴边位置会记住。
-- 编辑器顶部将“文件、捕捉、编辑、图像、查看、工具、帮助”菜单与图文工具栏分行。可裁剪、缩放、旋转、调整亮度、添加边缘和标题；绘图窗口左侧使用双列图标，底部调整颜色、线宽和字号。支持多标签、撤销/重做和图像合并。
-- 点击录像图标打开录像机，按“录制范围”和“录制选项”选择主显示器或矩形区域。声音默认关闭，录制前有 3 秒倒计时，录制时显示边框和带计时、暂停、结束按钮的控制条；结束后保存 MP4。“录音设置…”和“视频剪辑…”是使用可选 FFmpeg 的扩展入口。
-- 截图和进入标注时默认使用“实际大小 · 100%”，大图通过滚动浏览；可手动选择“适合窗口”或缩放。
-- 设置图标的菜单提供取色器、放大镜、标尺、聚光灯、十字线及定时自动截图。点击工具栏 `−` 收为图标，点击图标、双击通知区域图标或按 `Ctrl+Shift+F12` 展开。
-
-图像支持 PNG、JPEG、BMP、GIF、TIFF；GIF/TIFF 以首帧/首页静态图像编辑。PDF 仅支持单页栅格导出。绘图提交为像素，保留会话内撤销，不保留可再次选中的矢量对象。
-
-## 快捷键
-
-| 操作 | 默认快捷键 |
-| --- | --- |
-| 活动窗口 | `Alt+PrtSc` |
-| 窗口/对象 | `Shift+PrtSc` |
-| 矩形区域 | `Ctrl+PrtSc` |
-| 手绘区域 | `Ctrl+Shift+PrtSc` |
-| 全屏 | `PrtSc` |
-| 长截图 | `Ctrl+Alt+PrtSc` |
-| 固定区域 | `Ctrl+Alt+Shift+PrtSc` |
-| 显示工具栏 | `Ctrl+Shift+F12` |
-| 打开录像机 | `Ctrl+Shift+F9` |
-| 录像暂停/继续 | `Ctrl+F10` |
-| 结束录像 | `Ctrl+F11` |
-
-截图快捷键被占用时，可在“设置 → 快捷键”切换为 `Ctrl+Shift+1–7`，对应上表前七项。录屏快捷键仅在录制期间注册，冲突时使用录制控制条上的按钮。
-
-长截图需要手动操作：先选纯滚动内容区域，再向下滚动并按 `F8` 采集，按 `F9` 完成；每屏至少保留约四分之一重叠。单次最多 50 屏，并受总像素内存限制。适合静态内容，不支持自动滚动或固定标题栏消除；无法可靠匹配时会保留完整帧，可能出现重复区域。
-
-## 录屏与可选扩展
-
-日常无声录屏使用 Windows Media Foundation 保存 H.264 MP4，不访问 FFmpeg，也不读取声音设备。录像机将范围、声音、帧率和鼠标选项按组纵向排列，窗口随内容调整大小。Windows 需要可用的媒体组件；缺少媒体功能的系统版本需要先补齐对应组件。
-
-录制步骤：
-
-1. 选择全屏，或点击“选择区域…”拖出矩形。松开后可拖动选区内部移动、拖动四角调整大小，再“确认区域”“重新选择”或“取消”；`Enter` / 空格确认，方向键移动选区，`Shift` + 方向键调整大小，`Esc` / 右键取消。
-2. 点击“开始录制”，在 3 秒倒计时中查看区域尺寸、帧率和声音状态。按 `Esc` 或点击“取消”可返回设置。
-3. 通过常驻控制条查看已录时长、暂停或结束。暂停后提供继续、保存和丢弃；丢弃需要再次确认。也可使用 `Ctrl+F10` 暂停/继续、`Ctrl+F11` 结束。暂停期间不写入画面，继续后接续同一段录像。
-
-录像边框标示录制范围，控制条可拖动。程序在开始前使用 Windows 的窗口捕获排除能力，将控制条、边框和录像设置窗口排除在视频画面外；排除设置失败时不会开始录制。
-
-需要录音时，点击“录音设置…”配置 FFmpeg，随后在“声音”列表中选择本机 DirectShow 设备。声音默认关闭；选择“不录制声音”即可恢复无需 FFmpeg 的原生录屏。有声录制可保存 MP4/WMV，“视频剪辑…”提供视频首尾裁剪与转码，也需要 FFmpeg。
-
-扩展功能会自动检测已安装的 FFmpeg，也可以在扩展设置中重新检测、选择 `ffmpeg.exe` 或访问官方下载页。手动选择会被保存；也可以设置 `FRAMELET_FFMPEG`。这些显式配置失效只影响扩展功能，不影响无声录屏。视频信息优先通过同目录的 `ffprobe.exe` 读取。便携包不分发 FFmpeg。
-
-扩展已使用 FFmpeg 8.1.1 的 `gdigrab`、`libx264`、`wmv2` 验证合成画面编码与视频剪辑；其他安装需要包含这些组件。声音目前仅验证设备发现，未实际录音；没有实现专用的扬声器回环采集或摄像头叠加。真实桌面录像的验证范围见[验证记录](docs/validation.md)。
-
-取消保存对话框后录像保持暂停，控制条重新显示，可继续录制或再次保存。原生录像写入目标位置失败时保留录像，可以重新选择位置保存；若编码已结束，不能继续追加画面。编码异常时会提示可恢复文件的位置。
+[查看完整功能边界](docs/features.md) · [查看已完成的验证与限制](docs/validation.md)
 
 ## 从源码构建与验证
 
-主项目为 `src/Framelet/Framelet.csproj`，`global.json` 指定 .NET SDK `10.0.401`，允许同功能带的补丁升级。在仓库根目录运行：
+使用 Windows 与 .NET SDK **10.0.401**（版本约束见 `global.json`），在仓库根目录运行：
 
 ```powershell
-# 构建并生成 dist/Framelet/Framelet.exe
-./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish
+# 构建便携版；输出目录需为空
+./scripts/build.ps1 -Publish
 
-# 已有发布文件时，选择新的空目录
-./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.5.0
-
-# 图像、配置、格式、原生 MP4 编码和捕捉/拼接检查
-./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe'
-
-# 额外执行可选 FFmpeg 编码、暂停恢复、合并与裁剪检查
-./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe' -WithRecording
+# 图像、配置、原生 MP4 编码及捕捉/拼接检查
+./scripts/test.ps1
 ```
 
-SDK 已在 `PATH` 中时可以省略 `-DotnetPath`，也可以设置 `DOTNET_EXE`。发布目录必须为空，脚本会复制当前 README、文档、品牌素材及运行时许可；已有文件时用 `-PublishDirectory` 选择新目录，避免旧文件混入。默认自检包含原生 MP4 编码；录屏自检使用合成画面，不采集桌面或麦克风。应用自检报告写入 `artifacts/self-tests/results.json`；这些检查不等同于所有桌面交互都已验证，人工验证记录见 [验证说明](docs/validation.md)。
+SDK 不在 `PATH` 中时可传入 `-DotnetPath '<SDK>/dotnet.exe'`。完整构建参数、可选 FFmpeg 检查、命令行入口与诊断日志见 [开发与诊断](docs/development.md)。
 
-支持的命令行入口：
+## 文档与参与
 
-| 参数 | 用途 |
-| --- | --- |
-| `图片路径` | 在编辑器打开图片 |
-| `--editor` | 打开空白图像编辑器 |
-| `--recorder` | 打开录像机 |
-| `--profile 配置路径` | 指定主应用配置文件；录屏选项仍使用用户级配置 |
-| `--fixture` | 打开供人工捕捉验证使用的样例窗口 |
-| `--self-test` | 运行应用自检后退出 |
-| `--output 输出目录` | 指定自检产物目录，与 `--self-test` 配合 |
-| `--with-recording` | 在应用自检中增加 FFmpeg 编码与裁剪检查 |
+[使用指南](docs/usage.md) · [功能说明](docs/features.md) · [开发与诊断](docs/development.md) · [验证记录](docs/validation.md) · [品牌规范](docs/brand.md)
 
-品牌色、标志和界面原则见 [品牌说明](docs/brand.md)。默认将截图存入图片目录的 Framelet 文件夹。
-
-## 配置与诊断
-
-主应用配置为 `%LOCALAPPDATA%\Framelet\settings.json`，录屏配置为同目录的 `recorder.json`。首次使用此目录时采用默认设置，可在“设置”中调整快捷键与输出目录；无声录屏无需配置引擎，扩展录音与剪辑可在各自入口设置 FFmpeg。程序仅使用当前品牌的目录与环境变量，不自动导入其他位置的配置。
-
-设置 `FRAMELET_TRACE=1` 可启用诊断日志，日志保存在主应用配置所在目录的 `diagnostics.log`。设置 `FRAMELET_FFMPEG` 可指定扩展功能使用的 FFmpeg 可执行文件；`--profile` 可为主应用指定独立配置文件。
+遇到问题或有改进建议，欢迎提交 [Issue](https://github.com/chenzhiyong1994/Framelet/issues)。描述操作步骤、系统与显示缩放，附上便于复现的截图即可。
 
 ## 许可
 
-本项目采用 [MIT License](LICENSE)。便携包中的 .NET 运行时与外部 FFmpeg 的说明见 [第三方组件说明](THIRD-PARTY-NOTICES.md)。
+采用 [MIT License](LICENSE)。便携包中的 .NET 运行时与可选 FFmpeg 的说明见 [第三方组件说明](THIRD-PARTY-NOTICES.md)。
