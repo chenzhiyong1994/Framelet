@@ -54,8 +54,8 @@
       <p>常用入口集中在一行。拖到屏幕边缘后自动收为小图标，悬停或点击展开。</p>
       <img src="docs/images/framelet-panel.jpg" width="413" alt="Framelet 紧凑截图与录屏工具栏">
       <h3>录制中，也能从容控制</h3>
-      <p>红色边框表示录制中，黄色表示已暂停，标签显示状态和录制尺寸。计时、暂停与结束常驻；暂停后可继续、保存或丢弃。</p>
-      <img src="docs/images/framelet-recording-controls.png" width="365" alt="录制暂停后的控制条：继续录制、保存与丢弃">
+      <p>红色边框表示录制中，黄色表示已暂停，标签显示状态和录制尺寸。可随时确认放弃录像；结束和关闭时可选择保存、放弃或返回，无需为了退出先保存。</p>
+      <img src="docs/images/framelet-recording-controls.png" width="365" alt="录制控制条：计时、暂停或继续、结束录制与放弃">
     </td>
     <td width="48%" valign="top">
       <h3>范围与选项，一眼看清</h3>

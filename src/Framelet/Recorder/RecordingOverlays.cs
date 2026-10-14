@@ -25,8 +25,8 @@ internal sealed class RecordingControlBar : Form
 {
     private readonly Label time = new() { AutoSize = true, Text = "准备录制", Margin = new Padding(6, 7, 12, 0) };
     private readonly Button pause = ActionButton("暂停");
-    private readonly Button save = ActionButton("结束并保存");
-    private readonly Button discard = ActionButton("丢弃");
+    private readonly Button save = ActionButton("结束录制…");
+    private readonly Button discard = ActionButton("放弃");
     private readonly Label hint = new() { AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(5, 4, 5, 1) };
     private readonly Rectangle recordingBounds;
     private Point dragOrigin;
@@ -77,7 +77,7 @@ internal sealed class RecordingControlBar : Form
         save.Click += (_, _) => SaveRequested?.Invoke();
         discard.Click += (_, _) => DiscardRequested?.Invoke();
         Paint += (_, e) => ControlPaint.DrawBorder(e.Graphics, ClientRectangle, BrandTheme.Accent, ButtonBorderStyle.Solid);
-        // Closing the control bar means stop/save, never silently leave an invisible recording running.
+        // Closing the control bar opens the same save/discard/return choice as ending a recording.
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; SaveRequested?.Invoke(); } };
         ResumeLayout(true);
         UpdateState(RecordingState.Ready, TimeSpan.Zero, true, true, false, false);
@@ -106,11 +106,11 @@ internal sealed class RecordingControlBar : Form
         time.Text = $"{(paused ? "Ⅱ 已暂停" : state == RecordingState.Recording ? "● 录制中" : "准备中")}  {(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}";
         time.ForeColor = paused ? BrandTheme.Accent : Color.FromArgb(185, 49, 43);
         pause.Text = paused ? "继续" : "暂停";
-        save.Text = paused ? "保存" : "结束并保存";
-        discard.Visible = paused;
+        save.Text = "结束录制…";
+        discard.Visible = state is RecordingState.Recording or RecordingState.Paused;
         pause.Enabled = !busy && (state == RecordingState.Recording || (paused && canResume));
         save.Enabled = discard.Enabled = !busy && (state == RecordingState.Recording || paused);
-        hint.Text = pauseHotkey && stopHotkey ? "Framelet  ·  Ctrl+F10 暂停/继续  ·  Ctrl+F11 结束" : "Framelet  ·  使用上方按钮暂停、结束并保存";
+        hint.Text = pauseHotkey && stopHotkey ? "Framelet  ·  Ctrl+F10 暂停/继续  ·  Ctrl+F11 结束" : "Framelet  ·  可暂停、结束或放弃本次录像";
     }
 
     private static Button ActionButton(string text) => new()

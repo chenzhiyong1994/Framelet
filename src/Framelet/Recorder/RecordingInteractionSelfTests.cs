@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Framelet;
 
-/// <summary>Selection geometry and explicit recording discard, without showing UI or capturing the desktop.</summary>
+/// <summary>Selection geometry and recording exit flows, without visible UI or capturing the desktop.</summary>
 internal static class RecordingInteractionSelfTests
 {
     public static async Task<IReadOnlyList<string>> RunAsync()
@@ -11,11 +11,16 @@ internal static class RecordingInteractionSelfTests
         CheckBoundaryGeometry();
         CheckBoundaryStates();
         await CheckDiscardAsync().ConfigureAwait(false);
+        await CheckFinishChoicesAsync().ConfigureAwait(false);
         return
         [
             "PASS Recording selection: reverse drag, corner and interior drag adjustments, 2 x 2 minimum, desktop boundaries and negative origins",
             "PASS Recording boundary: dimensions and recording/paused status, click-through capture exclusion, full-screen and negative-origin edges",
-            "PASS Recording discard: paused synthetic recording is removed; neighboring data survives; discarded recording cannot resume"
+            "PASS Recording discard: paused synthetic recording is removed; neighboring data survives; discarded recording cannot resume",
+            "PASS Recording finish: cancel and canceled save retain a resumable paused recording; only save requests a destination",
+            "PASS Recording finish discard: active recording is removed without selecting a destination; neighboring data survives; recorder can start again",
+            "PASS Recording close: cancel keeps the recording open; discard closes the actual form without selecting a destination",
+            "PASS Recording save and exit: canceling the destination keeps the recorder open; retry saves MP4 and exits with temporary files cleaned"
         ];
     }
 
@@ -255,6 +260,237 @@ internal static class RecordingInteractionSelfTests
         catch (ObjectDisposedException) { return; }
         throw new InvalidOperationException("Resuming after discard must reject the disposed recording.");
     }
+
+    private static async Task CheckFinishChoicesAsync()
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            using var dispatcher = new Control();
+            _ = dispatcher.Handle;
+            dispatcher.BeginInvoke(new Action(async () =>
+            {
+                try
+                {
+                    await CheckFinishAndDiscardFormAsync();
+                    await CheckCloseFormAsync();
+                    await CheckSaveAndCloseFormAsync();
+                    completed.TrySetResult();
+                }
+                catch (Exception ex) { completed.TrySetException(ex); }
+                finally { Application.ExitThread(); }
+            }));
+            Application.Run();
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+    }
+
+    private static async Task CheckFinishAndDiscardFormAsync()
+    {
+        await using var recording = await StartSyntheticRecordingAsync();
+        using var form = CreateHiddenRecorder(recording);
+        int pathRequests = 0;
+        form.SavePathOverride = native =>
+        {
+            Assert(native, "The native recording uses the MP4 destination picker");
+            pathRequests++;
+            return null;
+        };
+        form.FinishPromptOverride = closing =>
+        {
+            Assert(!closing, "Ending a recording does not imply closing its recorder");
+            Assert(recording.State == RecordingState.Paused, "The decision is made after the recording is safely paused");
+            return RecordingFinishChoice.Cancel;
+        };
+        Assert(GetRecorderField<Button>(form, "discardButton")!.Enabled,
+            "The direct discard action is available during recording");
+        await form.FinishRecordingAsync();
+        Assert(pathRequests == 0, "Returning to the recorder must not request a save destination");
+        Assert(ReferenceEquals(GetRecorderField<ScreenRecordingSession>(form, "session"), recording)
+            && recording.State == RecordingState.Paused && recording.CanResume,
+            "Cancel keeps the same paused recording available to resume");
+        Assert(GetRecorderField<Button>(form, "discardButton")!.Enabled,
+            "The direct discard action remains available while paused");
+
+        form.FinishPromptOverride = _ => RecordingFinishChoice.Save;
+        await form.FinishRecordingAsync();
+        Assert(pathRequests == 1, "Choosing save is the only branch that requests a destination");
+        Assert(ReferenceEquals(GetRecorderField<ScreenRecordingSession>(form, "session"), recording)
+            && recording.State == RecordingState.Paused && recording.CanResume
+            && Directory.EnumerateFiles(recording.RecoveryDirectory, "*.mp4").Any(),
+            "Canceling the destination picker retains the paused recording and its recoverable video");
+        Assert(!form.IsDisposed && GetRecorderField<Button>(form, "closeButton")!.Enabled,
+            "Canceling save does not trap the user in a disabled recorder");
+
+        await recording.ResumeAsync();
+        Assert(recording.State == RecordingState.Recording, "A canceled save still allows recording to continue");
+        string recovery = recording.RecoveryDirectory;
+        string neighbor = recovery + "-finish-keep.txt";
+        const string sentinel = "This adjacent file is not owned by the discarded session.";
+        try
+        {
+            await File.WriteAllTextAsync(neighbor, sentinel);
+            form.FinishPromptOverride = _ => RecordingFinishChoice.Discard;
+            await form.FinishRecordingAsync();
+            Assert(pathRequests == 1, "Discard never opens or reopens the save destination picker");
+            Assert(!Directory.Exists(recovery) && !recording.CanResume,
+                "Discarding an active recording removes its temporary video and ends the session");
+            Assert(await File.ReadAllTextAsync(neighbor) == sentinel,
+                "Discard through the recorder leaves the adjacent file untouched");
+            Assert(GetRecorderField<ScreenRecordingSession>(form, "session") is null
+                && !form.IsDisposed && GetRecorderField<Button>(form, "startButton")!.Enabled,
+                "Finishing with discard returns the open recorder to a state that can start again");
+        }
+        finally
+        {
+            File.Delete(neighbor);
+            await recording.DiscardAsync();
+        }
+    }
+
+    private static async Task CheckCloseFormAsync()
+    {
+        await using var recording = await StartSyntheticRecordingAsync();
+        await recording.PauseAsync();
+        using var form = CreateHiddenRecorder(recording);
+        form.Show();
+        int pathRequests = 0;
+        int closePrompts = 0;
+        form.SavePathOverride = _ => { pathRequests++; return null; };
+        form.FinishPromptOverride = closing =>
+        {
+            Assert(closing, "The actual window close routes through the save/discard/cancel decision");
+            closePrompts++;
+            return RecordingFinishChoice.Cancel;
+        };
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        form.FormClosed += (_, _) => closed.TrySetResult();
+        string recovery = recording.RecoveryDirectory;
+        try
+        {
+            form.Close();
+            Assert(closePrompts == 1 && !form.IsDisposed && !closed.Task.IsCompleted
+                && recording.State == RecordingState.Paused && recording.CanResume,
+                "Canceling window close keeps the paused session and its recorder available");
+            Assert(pathRequests == 0, "Canceling window close never requests a save destination");
+            form.FinishPromptOverride = closing =>
+            {
+                Assert(closing, "A later close attempt retains the intent to exit after discard");
+                closePrompts++;
+                return RecordingFinishChoice.Discard;
+            };
+            form.Close();
+            await closed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert(form.IsDisposed && closePrompts == 2,
+                "Discard and exit really closes the form without a second decision prompt");
+            Assert(pathRequests == 0 && !Directory.Exists(recovery)
+                && GetRecorderField<ScreenRecordingSession>(form, "session") is null,
+                "Discard and exit clears the session without ever requiring a destination");
+        }
+        finally { await recording.DiscardAsync(); }
+    }
+
+    private static async Task CheckSaveAndCloseFormAsync()
+    {
+        await using var recording = await StartSyntheticRecordingAsync();
+        await recording.PauseAsync();
+        using var form = CreateHiddenRecorder(recording);
+        form.Show();
+        int pathRequests = 0;
+        int closePrompts = 0;
+        form.FinishPromptOverride = closing =>
+        {
+            Assert(closing, "Saving from window close preserves the request to exit after saving");
+            closePrompts++;
+            return RecordingFinishChoice.Save;
+        };
+        form.SavePathOverride = _ => { pathRequests++; return null; };
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        form.FormClosed += (_, _) => closed.TrySetResult();
+        string recovery = recording.RecoveryDirectory;
+        string outputDirectory = Path.Combine(Path.GetTempPath(), "Framelet-save-exit-" + Guid.NewGuid().ToString("N"));
+        string output = Path.Combine(outputDirectory, "saved.mp4");
+        string config = (string)typeof(RecorderPreferences).GetProperty("ConfigPath",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.GetValue(null)!;
+        // A successful save remembers its destination. Preserve the user's exact original settings bytes.
+        byte[]? originalConfig = File.Exists(config) ? await File.ReadAllBytesAsync(config) : null;
+        try
+        {
+            form.Close();
+            Assert(closePrompts == 1 && pathRequests == 1 && !form.IsDisposed && !closed.Task.IsCompleted,
+                "Canceling the save destination during exit must cancel closing as well");
+            Assert(ReferenceEquals(GetRecorderField<ScreenRecordingSession>(form, "session"), recording)
+                && recording.State == RecordingState.Paused && recording.CanResume
+                && Directory.EnumerateFiles(recovery, "*.mp4").Any(),
+                "Canceled save-and-exit keeps the original paused video available");
+
+            form.SavePathOverride = _ => { pathRequests++; return output; };
+            form.Close();
+            await closed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert(form.IsDisposed && closePrompts == 2 && pathRequests == 2,
+                "A later save-and-exit request saves and really closes without another decision prompt");
+            byte[] movie = await File.ReadAllBytesAsync(output);
+            Assert(movie.Length > 128 && movie.AsSpan(4, 4).SequenceEqual("ftyp"u8)
+                && recording.State == RecordingState.Finished,
+                "Save and exit writes the encoded recording as a nonempty MP4 container");
+            Assert(!Directory.Exists(recovery) && GetRecorderField<ScreenRecordingSession>(form, "session") is null
+                && !Directory.EnumerateFiles(outputDirectory, ".framelet-recording-*.mp4").Any(),
+                "Successful save and exit disposes the session and cleans recovery and destination staging files");
+        }
+        finally
+        {
+            if (originalConfig is null) File.Delete(config);
+            else await File.WriteAllBytesAsync(config, originalConfig);
+            await recording.DiscardAsync();
+            File.Delete(output);
+            if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory);
+        }
+        Assert(originalConfig is null ? !File.Exists(config) : (await File.ReadAllBytesAsync(config)).SequenceEqual(originalConfig),
+            "The save-and-exit check restores the user's recorder preferences byte for byte");
+    }
+
+    private static async Task<ScreenRecordingSession> StartSyntheticRecordingAsync()
+    {
+        var frames = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int count = 0;
+        var recording = new ScreenRecordingSession(new RecordingOptions(new Rectangle(0, 0, 160, 120), 15, false),
+            (bitmap, _) =>
+            {
+                using var graphics = Graphics.FromImage(bitmap);
+                graphics.Clear(Color.DarkSlateBlue);
+                if (Interlocked.Increment(ref count) >= 2) frames.TrySetResult();
+            });
+        try
+        {
+            await recording.StartAsync();
+            await frames.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            return recording;
+        }
+        catch
+        {
+            await recording.DiscardAsync();
+            throw;
+        }
+    }
+
+    private static RecorderForm CreateHiddenRecorder(ScreenRecordingSession recording)
+    {
+        var form = new RecorderForm
+        {
+            Opacity = 0, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-32000, -32000)
+        };
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        typeof(RecorderForm).GetField("session", flags)!.SetValue(form, recording);
+        typeof(RecorderForm).GetMethod("SetButtons", flags)!.Invoke(form, null);
+        return form;
+    }
+
+    private static T? GetRecorderField<T>(RecorderForm form, string name) where T : class
+        => (T?)typeof(RecorderForm).GetField(name,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(form);
 
     private static void Equal<T>(T expected, T actual, string behavior) where T : IEquatable<T>
         => Assert(expected.Equals(actual), $"{behavior}: expected {expected}, got {actual}");

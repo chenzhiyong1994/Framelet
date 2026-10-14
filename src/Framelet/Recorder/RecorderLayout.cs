@@ -133,10 +133,12 @@ public sealed partial class RecorderForm
             Margin = new Padding(0, 0, 0, 5)
         };
         ConfigureRecorderButton(pauseButton, "暂停");
-        ConfigureRecorderButton(stopButton, "结束并保存");
+        ConfigureRecorderButton(stopButton, "结束录制…");
+        ConfigureRecorderButton(discardButton, "放弃录像");
         stopButton.Margin = Padding.Empty;
         pauseButton.Margin = new Padding(0, 0, 6, 0);
-        recordingActions.Controls.AddRange([stopButton, pauseButton]);
+        discardButton.Margin = new Padding(0, 0, 6, 0);
+        recordingActions.Controls.AddRange([stopButton, pauseButton, discardButton]);
         layout.Controls.Add(recordingActions);
 
         var actions = new TableLayoutPanel
@@ -164,7 +166,7 @@ public sealed partial class RecorderForm
         hints.MaximumSize = new Size(368, 0);
         hints.Dock = DockStyle.Fill;
         hints.ForeColor = SystemColors.GrayText;
-        hints.Text = "Ctrl+F10 暂停/继续 · Ctrl+F11 结束并保存";
+        hints.Text = "Ctrl+F10 暂停/继续 · Ctrl+F11 结束（保存或放弃）";
         hints.Margin = new Padding(0, 8, 0, 0);
         layout.Controls.Add(hints);
 
@@ -173,7 +175,8 @@ public sealed partial class RecorderForm
         toolTip.SetToolTip(minimize, "开始后收起设置窗口；通过录制控制条或快捷键暂停和结束。");
         toolTip.SetToolTip(editButton, "打开可选的视频剪辑工具。");
         toolTip.SetToolTip(pauseButton, "暂停或继续录制（Ctrl+F10）");
-        toolTip.SetToolTip(stopButton, "结束录制并保存视频（Ctrl+F11）");
+        toolTip.SetToolTip(stopButton, "结束录制，选择保存、放弃或返回（Ctrl+F11）");
+        toolTip.SetToolTip(discardButton, "放弃本次未保存的录像，无需选择保存位置");
         AcceptButton = startButton;
     }
 

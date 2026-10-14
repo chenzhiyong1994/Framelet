@@ -17,7 +17,9 @@ public static class EditorSelfTests
                 using var editor = new EditorForm(image);
                 using var draw = new DrawForm(image);
                 using var recorder = new RecorderForm();
-                foreach (var window in new Form[] { editor, draw, recorder })
+                using var finish = new RecordingFinishDialog(false);
+                using var close = new RecordingFinishDialog(true);
+                foreach (var window in new Form[] { editor, draw, recorder, finish, close })
                 {
                     // Exercise proportional control and text sizing without changing the user's monitor settings.
                     // This is a layout check; real per-monitor DPI transitions still require a display test.
@@ -51,7 +53,9 @@ public static class EditorSelfTests
             using var editor = new EditorForm(image);
             using var draw = new DrawForm(image);
             using var recorder = new RecorderForm();
-            foreach (var window in new Form[] { editor, draw, recorder })
+            using var finish = new RecordingFinishDialog(false);
+            using var close = new RecordingFinishDialog(true);
+            foreach (var window in new Form[] { editor, draw, recorder, finish, close })
             {
                 // Create the real native control handles, including ComboBox/NumericUpDown, without
                 // showing a window, recording the desktop, or changing the monitor's DPI setting.
@@ -94,7 +98,7 @@ public static class EditorSelfTests
                     if (stateSizes.TryGetValue(state, out var expected))
                         Equal(expected, controlBar.Size);
                     else stateSizes.Add(state, controlBar.Size);
-                    var expectedActions = state == RecordingState.Paused ? new[] { "继续", "保存", "丢弃" } : new[] { "暂停", "结束并保存" };
+                    var expectedActions = state == RecordingState.Paused ? new[] { "继续", "结束录制…", "放弃" } : new[] { "暂停", "结束录制…", "放弃" };
                     var buttons = Descendants(controlBar).OfType<Button>().ToArray();
                     foreach (string action in expectedActions)
                     {

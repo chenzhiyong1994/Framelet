@@ -18,6 +18,7 @@ public sealed partial class RecorderForm : Form
     private readonly Button startButton = new() { Text = "●  录制", Width = 104, Height = 30 };
     private readonly Button pauseButton = new() { Text = "Ⅱ  暂停", Enabled = false, Width = 104, Height = 30 };
     private readonly Button stopButton = new() { Text = "■  结束", Enabled = false, Width = 104, Height = 30 };
+    private readonly Button discardButton = new() { Text = "放弃录像", Enabled = false };
     private readonly Button closeButton = new() { Text = "关闭", Width = 74, Height = 30 };
     private readonly Button editButton = new() { Text = "扩展剪辑…", Width = 110, Height = 28 };
     private readonly Label status = new() { Text = "就绪 · 可直接录制", AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -39,6 +40,10 @@ public sealed partial class RecorderForm : Form
     private bool selectingRegion;
     private string? resolvedEngine;
     private bool canClose;
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Func<bool, RecordingFinishChoice>? FinishPromptOverride { get; set; }
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Func<bool, string?>? SavePathOverride { get; set; }
     private bool hotkeyPause;
     private bool hotkeyStop;
     private const int PauseHotkeyId = 0x7901, StopHotkeyId = 0x7902;
@@ -70,6 +75,7 @@ public sealed partial class RecorderForm : Form
         startButton.Click += async (_, _) => await StartRecordingAsync();
         pauseButton.Click += async (_, _) => await TogglePauseAsync();
         stopButton.Click += async (_, _) => await FinishRecordingAsync();
+        discardButton.Click += async (_, _) => await DiscardRecordingAsync();
         closeButton.Click += (_, _) => Close();
         editButton.Click += (_, _) =>
         {
@@ -279,9 +285,10 @@ public sealed partial class RecorderForm : Form
         finally { busy = false; SetButtons(); }
     }
 
-    private async Task FinishRecordingAsync()
+    internal async Task FinishRecordingAsync(bool closeAfter = false)
     {
         if (busy || session is null || session.State is not (RecordingState.Recording or RecordingState.Paused)) return;
+        bool saving = false;
         busy = true;
         SetButtons();
         try
@@ -290,27 +297,30 @@ public sealed partial class RecorderForm : Form
             RestoreOverlayCapture();
             UpdateRecordingOverlays();
             controlBar?.Hide();
+            boundary?.Hide();
             ShowSettings();
-            status.Text = "Ⅱ  已暂停 · 请选择保存位置";
-            using var dialog = new SaveFileDialog
+            status.Text = "Ⅱ  已暂停 · 可保存、放弃或返回录制";
+            var choice = FinishPromptOverride?.Invoke(closeAfter) ?? RecordingFinishDialog.Ask(this, closeAfter);
+            if (choice == RecordingFinishChoice.Cancel) return;
+            if (choice == RecordingFinishChoice.Discard)
             {
-                Title = "保存录像", Filter = session.UsesNativeBackend
-                    ? "MP4 视频 (*.mp4)|*.mp4"
-                    : "MP4 视频 (*.mp4)|*.mp4|Windows Media 视频 (*.wmv)|*.wmv",
-                DefaultExt = "mp4", AddExtension = true, OverwritePrompt = true,
-                InitialDirectory = Directory.Exists(preferences.LastDirectory) ? preferences.LastDirectory : Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
-                FileName = "录像_" + DateTime.Now.ToString("yyyy-MM-dd_HHmmss") + ".mp4"
-            };
-            if (dialog.ShowDialog(this) != DialogResult.OK)
+                await DiscardSessionAsync();
+                if (closeAfter) { canClose = true; Close(); }
+                return;
+            }
+            status.Text = "Ⅱ  已暂停 · 请选择保存位置";
+            string? outputPath = SavePathOverride is { } pickPath ? pickPath(session.UsesNativeBackend) : SelectRecordingPath();
+            if (outputPath is null)
             {
                 status.Text = session.CanResume
-                    ? "Ⅱ  已暂停 · 可继续录像，或再次点击“结束”保存"
-                    : "录像已保留 · 可重新选择位置保存";
+                    ? "Ⅱ  已暂停 · 可继续、放弃录像，或再次选择保存"
+                    : "录像已保留 · 可放弃录像，或再次选择保存";
                 return;
             }
             status.Text = "正在保存视频，请稍候…";
             UnregisterRecordingHotkeys();
-            var output = await session.FinishAsync(dialog.FileName);
+            saving = true;
+            var output = await session.FinishAsync(outputPath);
             lastSavedVideo = output;
             preferences.LastDirectory = Path.GetDirectoryName(output);
             preferences.Save();
@@ -318,19 +328,42 @@ public sealed partial class RecorderForm : Form
             CloseRecordingOverlays();
             status.Text = "已保存：" + Path.GetFileName(output);
             toolTip.SetToolTip(status, output);
-            MessageBox.Show(this, "录像已保存：\n" + output, "屏幕录像机", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (closeAfter)
+            {
+                await session.DisposeAsync();
+                session = null;
+                canClose = true;
+                Close();
+            }
+            else MessageBox.Show(this, "录像已保存：\n" + output, "屏幕录像机", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-        catch (Exception ex) { await ReportFailureAsync(ex, retrySaving: true); }
+        catch (Exception ex) { await ReportFailureAsync(ex, retrySaving: saving); }
         finally
         {
             busy = false;
-            if (session?.State == RecordingState.Paused && controlBar is not null)
+            if (!IsDisposed && session?.State == RecordingState.Paused && controlBar is not null)
             {
+                boundary?.Show();
                 controlBar.Show();
                 controlBar.Activate();
             }
             SetButtons();
         }
+    }
+
+    private string? SelectRecordingPath()
+    {
+        if (session is null) return null;
+        using var dialog = new SaveFileDialog
+        {
+            Title = "保存录像", Filter = session.UsesNativeBackend
+                ? "MP4 视频 (*.mp4)|*.mp4"
+                : "MP4 视频 (*.mp4)|*.mp4|Windows Media 视频 (*.wmv)|*.wmv",
+            DefaultExt = "mp4", AddExtension = true, OverwritePrompt = true,
+            InitialDirectory = Directory.Exists(preferences.LastDirectory) ? preferences.LastDirectory : Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+            FileName = "录像_" + DateTime.Now.ToString("yyyy-MM-dd_HHmmss") + ".mp4"
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
     }
 
     private void ShowRecordingOverlays(Rectangle bounds)
@@ -390,24 +423,37 @@ public sealed partial class RecorderForm : Form
 
     private async Task DiscardRecordingAsync()
     {
-        if (busy || session?.State != RecordingState.Paused) return;
+        if (busy || session?.State is not (RecordingState.Recording or RecordingState.Paused)) return;
         busy = true;
         SetButtons();
         try
         {
-            if (MessageBox.Show(controlBar ?? (IWin32Window)this, "丢弃本次录像？尚未保存的画面将被删除。", "丢弃录像",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-            await session.DiscardAsync();
-            session = null;
-            timer.Stop();
-            UnregisterRecordingHotkeys();
-            CloseRecordingOverlays();
-            ShowSettings();
-            elapsed.Text = "00:00:00";
-            status.Text = "已丢弃本次录像 · 可以重新录制";
+            if (session.State == RecordingState.Recording) await session.PauseAsync();
+            RestoreOverlayCapture();
+            UpdateRecordingOverlays();
+            if (MessageBox.Show(controlBar ?? (IWin32Window)this, "放弃本次录像？尚未保存的画面将被删除。", "放弃录像",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            {
+                status.Text = session.CanResume ? "Ⅱ  已暂停 · 可继续录制" : "录像已保留 · 可保存或放弃";
+                return;
+            }
+            await DiscardSessionAsync();
         }
         catch (Exception ex) { await ReportFailureAsync(ex); }
         finally { busy = false; SetButtons(); }
+    }
+
+    private async Task DiscardSessionAsync()
+    {
+        if (session is null) return;
+        await session.DiscardAsync();
+        session = null;
+        timer.Stop();
+        UnregisterRecordingHotkeys();
+        CloseRecordingOverlays();
+        ShowSettings();
+        elapsed.Text = "00:00:00";
+        status.Text = "已放弃本次录像 · 可以重新录制";
     }
 
     private async Task OnTimerAsync()
@@ -463,6 +509,7 @@ public sealed partial class RecorderForm : Form
         editButton.Enabled = !busy && !checkingEngine && !selectingRegion && !active;
         pauseButton.Enabled = !busy && (session?.State == RecordingState.Recording || (session?.State == RecordingState.Paused && session.CanResume));
         stopButton.Enabled = !busy && session?.State is RecordingState.Recording or RecordingState.Paused;
+        discardButton.Enabled = stopButton.Enabled;
         closeButton.Enabled = !busy && !checkingEngine && !selectingRegion;
         pauseButton.Text = session?.State == RecordingState.Paused ? "▶  继续" : "Ⅱ  暂停";
         var actions = Controls.Find("RecorderSessionActions", true).FirstOrDefault();
@@ -477,8 +524,8 @@ public sealed partial class RecorderForm : Form
         if (session?.State is RecordingState.Recording or RecordingState.Paused)
         {
             e.Cancel = true;
-            await FinishRecordingAsync();
-            if (session?.State != RecordingState.Finished) return;
+            await FinishRecordingAsync(closeAfter: true);
+            return;
         }
         timer.Stop();
         UnregisterRecordingHotkeys();
@@ -495,7 +542,7 @@ public sealed partial class RecorderForm : Form
     {
         hotkeyPause = RegisterHotKey(Handle, PauseHotkeyId, 0x4002, (int)Keys.F10);
         hotkeyStop = RegisterHotKey(Handle, StopHotkeyId, 0x4002, (int)Keys.F11);
-        hints.Text = hotkeyPause && hotkeyStop ? "Ctrl+F10 暂停/继续 · Ctrl+F11 结束并保存" : "快捷键被其他程序占用；请使用录制控制条上的按钮。";
+        hints.Text = hotkeyPause && hotkeyStop ? "Ctrl+F10 暂停/继续 · Ctrl+F11 结束（保存或放弃）" : "快捷键被其他程序占用；请使用录制控制条上的按钮。";
     }
     private void UnregisterRecordingHotkeys()
     {
