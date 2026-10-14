@@ -123,42 +123,112 @@ internal sealed class RecordingControlBar : Form
 
 internal sealed class RecordingBoundary : Form
 {
-    private readonly System.Windows.Forms.Timer blink = new() { Interval = 600 };
+    private readonly System.Windows.Forms.Timer pulse = new() { Interval = 700 };
+    private readonly Rectangle recordingBounds;
+    private readonly Rectangle captureRectangle;
+    private readonly Rectangle statusRectangle;
+    private RecordingState state = RecordingState.Ready;
     private bool alternate;
+
     public RecordingBoundary(Rectangle bounds)
     {
         AutoScaleMode = AutoScaleMode.None; // Capture coordinates are physical pixels, including on mixed-DPI desktops.
+        Name = "RecordingBoundary";
+        AccessibleName = "录制区域边框";
+        Font = new Font("Microsoft YaHei UI", 13, FontStyle.Bold, GraphicsUnit.Pixel);
+        recordingBounds = bounds;
         StartPosition = FormStartPosition.Manual;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
-        Bounds = Rectangle.Intersect(Rectangle.Inflate(bounds, 3, 3), SystemInformation.VirtualScreen);
-        BackColor = BrandTheme.Coral;
-        var ring = new Region(ClientRectangle);
-        ring.Exclude(Rectangle.Inflate(ClientRectangle, -3, -3));
+        // Layered + transparent makes the entire overlay, including its status badge, pass mouse input
+        // to other processes. WS_EX_TRANSPARENT alone only orders same-thread window painting.
+        Opacity = 0.99;
+        BackColor = BrandTheme.Ink;
+        DoubleBuffered = true;
+        var labelSize = TextRenderer.MeasureText($"● 录制中  ·  {bounds.Width} × {bounds.Height}", Font);
+        var layout = RecordingBoundaryGeometry.Create(bounds, SystemInformation.VirtualScreen,
+            Screen.FromRectangle(bounds).Bounds, new Size(labelSize.Width + 24, labelSize.Height + 12));
+        Bounds = layout.Window;
+        captureRectangle = layout.Capture;
+        statusRectangle = layout.Status;
+        var ring = new Region(captureRectangle);
+        var interior = Rectangle.Inflate(captureRectangle, -RecordingBoundaryGeometry.BorderWidth, -RecordingBoundaryGeometry.BorderWidth);
+        if (interior.Width > 0 && interior.Height > 0) ring.Exclude(interior);
+        ring.Union(statusRectangle);
         Region = ring;
-        blink.Tick += (_, _) => { alternate = !alternate; BackColor = alternate ? BrandTheme.Coral : BrandTheme.Accent; };
+        pulse.Tick += (_, _) => { alternate = !alternate; Invalidate(); };
+        UpdateState(RecordingState.Ready);
     }
 
     protected override bool ShowWithoutActivation => true;
     protected override CreateParams CreateParams
     {
-        get { var value = base.CreateParams; value.ExStyle |= 0x080000A0; return value; } // no-activate, tool-window, click-through
+        get { var value = base.CreateParams; value.ExStyle |= 0x080800A0; return value; } // no-activate, layered, tool-window, click-through
     }
-    protected override void OnShown(EventArgs e)
+
+    public void SetPaused(bool paused) => UpdateState(paused ? RecordingState.Paused : RecordingState.Recording);
+
+    public void UpdateState(RecordingState value)
     {
-        base.OnShown(e);
-        blink.Start();
+        state = value;
+        string label = state == RecordingState.Recording ? "● 录制中" : state == RecordingState.Paused ? "Ⅱ 已暂停" : "准备录制";
+        Text = AccessibleDescription = $"{label}  ·  {recordingBounds.Width} × {recordingBounds.Height}";
+        if (state == RecordingState.Recording) pulse.Start();
+        else { pulse.Stop(); alternate = false; }
+        Invalidate();
     }
-    public void SetPaused(bool paused)
+
+    protected override void OnPaint(PaintEventArgs e)
     {
-        if (paused) { blink.Stop(); BackColor = BrandTheme.Accent; }
-        else blink.Start();
+        base.OnPaint(e);
+        var color = state == RecordingState.Paused ? Color.FromArgb(239, 179, 62)
+            : state == RecordingState.Recording ? (alternate ? Color.FromArgb(239, 82, 67) : Color.FromArgb(211, 48, 45))
+            : BrandTheme.Accent;
+        using var fill = new SolidBrush(color);
+        e.Graphics.FillRectangle(fill, captureRectangle);
+        if (captureRectangle.Width > 1 && captureRectangle.Height > 1)
+        {
+            using var dark = new Pen(BrandTheme.Ink);
+            e.Graphics.DrawRectangle(dark, captureRectangle.X, captureRectangle.Y, captureRectangle.Width - 1, captureRectangle.Height - 1);
+            var inner = Rectangle.Inflate(captureRectangle, -RecordingBoundaryGeometry.BorderWidth + 1, -RecordingBoundaryGeometry.BorderWidth + 1);
+            if (inner.Width > 1 && inner.Height > 1)
+                e.Graphics.DrawRectangle(Pens.White, inner.X, inner.Y, inner.Width - 1, inner.Height - 1);
+        }
+        using var background = new SolidBrush(BrandTheme.Ink);
+        e.Graphics.FillRectangle(background, statusRectangle);
+        e.Graphics.FillRectangle(fill, statusRectangle.X, statusRectangle.Y, 4, statusRectangle.Height);
+        TextRenderer.DrawText(e.Graphics, Text, Font, Rectangle.Inflate(statusRectangle, -10, 0), Color.White,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
     }
+
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { blink.Dispose(); Region?.Dispose(); }
+        if (disposing) { pulse.Dispose(); Region?.Dispose(); }
         base.Dispose(disposing);
+    }
+}
+
+internal static class RecordingBoundaryGeometry
+{
+    internal const int BorderWidth = 5;
+
+    internal static (Rectangle Window, Rectangle Capture, Rectangle Status) Create(
+        Rectangle recordingBounds, Rectangle desktop, Rectangle targetScreen, Size statusSize)
+    {
+        var capture = Rectangle.Intersect(recordingBounds, desktop);
+        if (capture.Width < 1 || capture.Height < 1) throw new ArgumentException("录制区域不在当前桌面内。", nameof(recordingBounds));
+        var available = Rectangle.Intersect(targetScreen, desktop);
+        if (available.Width < 1 || available.Height < 1) available = desktop;
+        var size = new Size(Math.Min(statusSize.Width, available.Width), Math.Min(statusSize.Height, available.Height));
+        int x = Math.Clamp(capture.Left + 6, available.Left, available.Right - size.Width);
+        int y = capture.Top - size.Height - 6;
+        if (y < available.Top) y = Math.Clamp(capture.Top + BorderWidth + 3, available.Top, available.Bottom - size.Height);
+        var status = new Rectangle(x, y, size.Width, size.Height);
+        var window = Rectangle.Union(capture, status);
+        capture.Offset(-window.X, -window.Y);
+        status.Offset(-window.X, -window.Y);
+        return (window, capture, status);
     }
 }
 

@@ -182,7 +182,7 @@ public static class EditorSelfTests
             for (int y = 0; y < image.Height; y++)
                 for (int x = 0; x < image.Width; x++) image.SetPixel(x, y, (x + y) % 2 == 0 ? Color.Black : Color.White);
             using var document = new EditorDocument(image);
-            using var canvas = new ImageCanvas { Document = document, CenterVertically = true, Size = new Size(100, 100) };
+            using var canvas = new ImageCanvas { Document = document, CenterVertically = true, AllowEdgeCropping = true, Size = new Size(100, 100) };
             using var rendered = new Bitmap(100, 100);
             canvas.DrawToBitmap(rendered, new Rectangle(Point.Empty, rendered.Size));
             var origin = EditorViewport.Origin(canvas.ClientSize, image.Size, 1, Point.Empty, true);
@@ -247,6 +247,160 @@ public static class EditorSelfTests
             Equal(Color.Red.ToArgb(), doc.Image.GetPixel(1, 1).ToArgb());
             doc.Redo();
             Equal(2, doc.Image.Width);
+        });
+        Check("dragging every editor image edge and corner crops exact pixels as one undoable edit", () =>
+        {
+            using var input = new Bitmap(80, 60);
+            for (int y = 0; y < input.Height; y++)
+                for (int x = 0; x < input.Width; x++) input.SetPixel(x, y, Color.FromArgb(255, x * 3, y * 4, 80));
+            var cases = new (Point Start, Point End, Rectangle Retained)[]
+            {
+                (new(0, 30), new(10, 30), new(10, 0, 70, 60)),
+                (new(80, 30), new(70, 30), new(0, 0, 70, 60)),
+                (new(40, 0), new(40, 10), new(0, 10, 80, 50)),
+                (new(40, 60), new(40, 50), new(0, 0, 80, 50)),
+                (new(0, 0), new(10, 10), new(10, 10, 70, 50)),
+                (new(80, 0), new(70, 10), new(0, 10, 70, 50)),
+                (new(0, 60), new(10, 50), new(10, 0, 70, 50)),
+                (new(80, 60), new(70, 50), new(0, 0, 70, 50))
+            };
+            foreach (var sample in cases)
+            {
+                using var editor = new EditorForm(input);
+                LayoutTree(editor);
+                var canvas = Descendants(editor).OfType<ImageCanvas>().Single();
+                var doc = canvas.Document!;
+                var origin = EditorViewport.Origin(canvas.ClientSize, input.Size, canvas.Zoom, canvas.AutoScrollPosition, false);
+                Point Client(Point point) => Point.Round(new PointF(origin.X + point.X, origin.Y + point.Y));
+                CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, Client(sample.Start));
+                CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, Client(sample.End));
+                Equal(input.Size, doc.Image.Size);
+                Assert(!doc.CanUndo, "crop preview must not mutate the image or fill revision history");
+                CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, Client(sample.End));
+                Equal(sample.Retained.Size, doc.Image.Size);
+                Equal(input.GetPixel(sample.Retained.X, sample.Retained.Y).ToArgb(), doc.Image.GetPixel(0, 0).ToArgb());
+                Equal(input.GetPixel(sample.Retained.Right - 1, sample.Retained.Bottom - 1).ToArgb(),
+                    doc.Image.GetPixel(doc.Image.Width - 1, doc.Image.Height - 1).ToArgb());
+                Assert(!canvas.HasSelection, "committing an edge crop clears the old selection");
+                doc.Undo();
+                Equal(input.Size, doc.Image.Size);
+                Assert(!doc.CanUndo, "one complete edge gesture creates exactly one revision");
+                doc.Redo();
+                Equal(sample.Retained.Size, doc.Image.Size);
+            }
+        });
+        Check("edge crop follows zoomed scrolled pixels and clamps to one retained pixel", () =>
+        {
+            using var input = new Bitmap(800, 600);
+            using var doc = new EditorDocument(input);
+            using var canvas = new ImageCanvas { Document = doc, AllowEdgeCropping = true, Size = new Size(260, 200), Zoom = 2 };
+            _ = canvas.Handle;
+            canvas.AutoScrollPosition = new Point(300, 250);
+            Assert(canvas.AutoScrollPosition.X < 0 && canvas.AutoScrollPosition.Y < 0, "exercise actual scrolling");
+            var scroll = canvas.AutoScrollPosition;
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Middle, new Point(120, 100));
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Middle, new Point(140, 115));
+            CanvasMouse(canvas, "OnMouseUp", MouseButtons.Middle, new Point(140, 115));
+            Equal(new Point(scroll.X + 20, scroll.Y + 15), canvas.AutoScrollPosition);
+            Assert(!canvas.IsCropping && !doc.CanUndo, "middle-button pan keeps the image and crop history unchanged");
+            var origin = EditorViewport.Origin(canvas.ClientSize, input.Size, canvas.Zoom, canvas.AutoScrollPosition, false);
+            var from = Point.Round(new PointF(origin.X + 800 * 2, origin.Y + 300 * 2));
+            var to = new Point(from.X - 50, from.Y);
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, from);
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, to);
+            Equal(new Rectangle(0, 0, 775, 600), canvas.CropPreview);
+            CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, to);
+            Equal(new Size(775, 600), doc.Image.Size);
+            doc.Undo();
+            canvas.Zoom = .5f;
+            canvas.AutoScrollPosition = Point.Empty;
+            origin = EditorViewport.Origin(canvas.ClientSize, input.Size, canvas.Zoom, canvas.AutoScrollPosition, false);
+            from = Point.Round(new PointF(origin.X, origin.Y));
+            to = new Point(from.X + 500, from.Y + 400);
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, from);
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, to);
+            Equal(new Rectangle(799, 599, 1, 1), canvas.CropPreview);
+            CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, to);
+            Equal(new Size(1, 1), doc.Image.Size);
+        });
+        Check("edge crop cancels on Escape right click or lost capture and outward drags create no edit", () =>
+        {
+            using var input = new Bitmap(160, 100);
+            using var doc = new EditorDocument(input);
+            using var canvas = new ImageCanvas { Document = doc, AllowEdgeCropping = true, Size = new Size(300, 220) };
+            _ = canvas.Handle;
+            var origin = EditorViewport.Origin(canvas.ClientSize, input.Size, canvas.Zoom, canvas.AutoScrollPosition, false);
+            Point Client(int x, int y) => Point.Round(new PointF(origin.X + x, origin.Y + y));
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, Client(30, 30));
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, Client(100, 70));
+            CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, Client(100, 70));
+            Equal(new Rectangle(30, 30, 70, 40), canvas.Selection);
+            foreach (var cancel in new Action[]
+            {
+                () =>
+                {
+                    object?[] args = [Message.Create(canvas.Handle, 0, IntPtr.Zero, IntPtr.Zero), Keys.Escape];
+                    typeof(ImageCanvas).GetMethod("ProcessCmdKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                        .Invoke(canvas, args);
+                },
+                () => CanvasMouse(canvas, "OnMouseDown", MouseButtons.Right, Client(20, 50)),
+                () => canvas.Capture = false
+            })
+            {
+                CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, Client(0, 50));
+                CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, Client(20, 50));
+                Assert(canvas.IsCropping && canvas.Capture, "edge drag owns mouse capture until completed or cancelled");
+                Equal(new Rectangle(20, 0, 140, 100), canvas.CropPreview);
+                cancel();
+                Assert(!canvas.IsCropping && !canvas.Capture, "cancelling must release the gesture and capture");
+                CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, Client(20, 50));
+                Equal(input.Size, doc.Image.Size);
+                Equal(new Rectangle(30, 30, 70, 40), canvas.Selection);
+                Assert(!doc.CanUndo, "cancelled preview must not create history");
+            }
+            // A grab a few display pixels outside the image must retain its offset and stay a no-op when pulled outwards.
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, Client(-4, 50));
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, Client(-15, 50));
+            CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, Client(-15, 50));
+            Equal(input.Size, doc.Image.Size);
+            Assert(!doc.CanUndo, "outward edge drag cannot expand the image or create an empty revision");
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, Client(-4, 50));
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, Client(16, 50));
+            CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, Client(16, 50));
+            Equal(new Size(140, 100), doc.Image.Size);
+        });
+        Check("edge crop preview shades discarded pixels and preserves drawing-tool behavior", () =>
+        {
+            using var input = new Bitmap(160, 100);
+            using (var graphics = Graphics.FromImage(input)) graphics.Clear(Color.White);
+            using var doc = new EditorDocument(input);
+            using var canvas = new ImageCanvas { Document = doc, AllowEdgeCropping = true, Size = new Size(300, 220) };
+            var origin = EditorViewport.Origin(canvas.ClientSize, input.Size, 1, Point.Empty, false);
+            Point Client(int x, int y) => Point.Round(new PointF(origin.X + x, origin.Y + y));
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.None, Client(0, 50));
+            Equal(Cursors.SizeWE, canvas.Cursor);
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.None, Client(80, 0));
+            Equal(Cursors.SizeNS, canvas.Cursor);
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.None, Client(160, 100));
+            Equal(Cursors.SizeNWSE, canvas.Cursor);
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, Client(0, 50));
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, Client(40, 50));
+            using (var rendered = new Bitmap(canvas.Width, canvas.Height))
+            {
+                canvas.DrawToBitmap(rendered, canvas.ClientRectangle);
+                Assert(rendered.GetPixel(Client(15, 50).X, Client(15, 50).Y).R < 180, "discarded area must be visibly shaded");
+                Equal(Color.White.ToArgb(), rendered.GetPixel(Client(55, 50).X, Client(55, 50).Y).ToArgb());
+            }
+            canvas.CancelCrop();
+            canvas.Tool = AnnotationTool.Line;
+            CanvasMouse(canvas, "OnMouseDown", MouseButtons.Left, Client(0, 50));
+            CanvasMouse(canvas, "OnMouseMove", MouseButtons.Left, Client(40, 50));
+            CanvasMouse(canvas, "OnMouseUp", MouseButtons.Left, Client(40, 50));
+            Equal(input.Size, doc.Image.Size);
+            Assert(doc.CanUndo && doc.Image.GetPixel(20, 50).G < 180, "drawing a line from the image edge must still annotate");
+            using var draw = new DrawForm(input);
+            Assert(!Descendants(draw).OfType<ImageCanvas>().Single().AllowEdgeCropping,
+                "drawing palette selection keeps its existing edge-selection behavior");
         });
         Check("save checkpoint survives undo and a new edit invalidates redo", () =>
         {
@@ -427,6 +581,10 @@ public static class EditorSelfTests
             catch (Exception ex) { results.Add("FAIL editor: " + name + " — " + ex.Message); }
         }
     }
+
+    private static void CanvasMouse(ImageCanvas canvas, string method, MouseButtons button, Point location) =>
+        typeof(ImageCanvas).GetMethod(method, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(canvas, [new MouseEventArgs(button, 1, location.X, location.Y, 0)]);
 
     private static void Equal<T>(T expected, T actual) where T : notnull
     {

@@ -8,7 +8,6 @@ public sealed class CapturePanel : Form
 {
     private readonly AppSettings settings;
     private readonly NotifyIcon tray;
-    private readonly System.Windows.Forms.Timer foregroundTimer = new() { Interval = 150 };
     private readonly System.Windows.Forms.Timer intervalTimer = new();
     private readonly ToolStrip strip;
     private readonly ToolStrip launchStrip;
@@ -17,7 +16,6 @@ public sealed class CapturePanel : Form
     private EditorForm? editor;
     private RecorderForm? recorder;
     private bool restoreAfterRecorder;
-    private IntPtr previousWindow;
     private bool busy;
     private readonly List<int> hotkeys = [];
     private readonly List<string> conflicts = [];
@@ -37,11 +35,11 @@ public sealed class CapturePanel : Form
     private Size ExpandedSize => new(Px(408), Px(68));
     public static readonly (CaptureMode Mode, string Name, string Icon, string Shortcut, uint Modifiers)[] Captures =
     [
-        (CaptureMode.ActiveWindow, "捕捉活动窗口", "active", "Alt+PrtSc", 1),
+        (CaptureMode.ActiveWindow, "点选窗口截图", "active", "Alt+PrtSc", 1),
         (CaptureMode.WindowObject, "捕捉窗口或对象", "window", "Shift+PrtSc", 4),
         (CaptureMode.Rectangle, "捕捉矩形区域", "rect", "Ctrl+PrtSc", 2),
         (CaptureMode.Freehand, "捕捉手绘区域", "free", "Ctrl+Shift+PrtSc", 6),
-        (CaptureMode.FullScreen, "捕捉整个屏幕", "full", "PrtSc", 0),
+        (CaptureMode.FullScreen, "点选屏幕截图", "full", "PrtSc", 0),
         (CaptureMode.Scrolling, "捕捉滚动窗口", "scroll", "Ctrl+Alt+PrtSc", 3),
         (CaptureMode.FixedRegion, "捕捉固定大小区域", "fixed", "Ctrl+Alt+Shift+PrtSc", 7),
         (CaptureMode.RepeatLast, "重复上次捕捉", "repeat", "", 0)
@@ -108,13 +106,6 @@ public sealed class CapturePanel : Form
             foreach (var item in BuildOptionsItems()) trayMenu.Items.Add(item);
         };
         tray.ContextMenuStrip = trayMenu;
-        foregroundTimer.Tick += (_, _) =>
-        {
-            var hwnd = Native.GetForegroundWindow();
-            Native.GetWindowThreadProcessId(hwnd, out uint pid);
-            if (hwnd != IntPtr.Zero && pid != Environment.ProcessId) previousWindow = hwnd;
-        };
-        foregroundTimer.Start();
         intervalTimer.Tick += async (_, _) => { if (!busy) { intervalCount++; await CaptureAsync(CaptureMode.FullScreen, true); } };
         Load += (_, _) => RegisterShortcuts();
         Shown += (_, _) => {
@@ -336,8 +327,8 @@ public sealed class CapturePanel : Form
             if (settings.HideOnCapture) Hide();
             if (editorVisible) editor!.Hide();
             await Task.Delay(Math.Max(200, settings.DelaySeconds * 1000));
-            using Bitmap? bitmap = mode == CaptureMode.ActiveWindow && previousWindow != IntPtr.Zero
-                ? CaptureEngine.CaptureActiveWindow(previousWindow, settings.IncludeCursor)
+            using Bitmap? bitmap = interval
+                ? CaptureEngine.CaptureScreen(SystemInformation.VirtualScreen, settings.IncludeCursor)
                 : CaptureEngine.SelectCapture(mode, new Size(settings.FixedWidth, settings.FixedHeight), settings.IncludeCursor);
             if (bitmap == null) return;
             if (settings.Timestamp)
@@ -494,7 +485,7 @@ public sealed class CapturePanel : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { foreach (int id in hotkeys) Native.UnregisterHotKey(Handle, id); foregroundTimer.Dispose(); intervalTimer.Dispose(); dockTimer.Dispose(); panelTip.Dispose(); if (tray.ContextMenuStrip != null) { ClearMenu(tray.ContextMenuStrip.Items); tray.ContextMenuStrip.Dispose(); } tray.Dispose(); ClearMenu(strip.Items); ClearMenu(launchStrip.Items); brandMark.Dispose(); }
+        if (disposing) { foreach (int id in hotkeys) Native.UnregisterHotKey(Handle, id); intervalTimer.Dispose(); dockTimer.Dispose(); panelTip.Dispose(); if (tray.ContextMenuStrip != null) { ClearMenu(tray.ContextMenuStrip.Items); tray.ContextMenuStrip.Dispose(); } tray.Dispose(); ClearMenu(strip.Items); ClearMenu(launchStrip.Items); brandMark.Dispose(); }
         base.Dispose(disposing);
     }
     private static void ClearMenu(ToolStripItemCollection items)

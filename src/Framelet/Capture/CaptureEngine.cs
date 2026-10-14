@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Framelet;
 
@@ -52,13 +53,6 @@ public static class CaptureEngine
 
     public static Bitmap? SelectCapture(CaptureMode mode, Size fixedSize, bool includeCursor = false)
     {
-        if (mode == CaptureMode.ActiveWindow)
-            return CaptureActiveWindow(NativeCapture.GetForegroundWindow(), includeCursor);
-        if (mode == CaptureMode.FullScreen)
-        {
-            LastRegion = SystemInformation.VirtualScreen;
-            return CaptureScreen(LastRegion, includeCursor);
-        }
         if (mode == CaptureMode.RepeatLast && !LastRegion.IsEmpty)
         {
             var bounds = Rectangle.Intersect(LastRegion, SystemInformation.VirtualScreen);
@@ -76,6 +70,24 @@ public static class CaptureEngine
         }
         return overlay.CreateSelectionBitmap();
     }
+
+    public static Rectangle? SelectScreenBounds()
+    {
+        using var overlay = new CaptureSelection(CaptureMode.FullScreen, Size.Empty, false);
+        return overlay.ShowDialog() == DialogResult.OK ? overlay.SelectedBounds : null;
+    }
+}
+
+internal sealed record CaptureTarget(Rectangle Bounds, string Label);
+
+internal static class CaptureTargets
+{
+    // Targets are ordered front to back for windows. Gaps between monitors are not targets.
+    internal static CaptureTarget? AtPoint(IReadOnlyList<CaptureTarget> targets, Point point)
+        => targets.FirstOrDefault(target => target.Bounds.Contains(point));
+
+    internal static CaptureTarget[] Screens() => Screen.AllScreens.Select((screen, index) =>
+        new CaptureTarget(screen.Bounds, $"屏幕 {index + 1}{(screen.Primary ? " · 主屏幕" : "")} · {screen.Bounds.Width} × {screen.Bounds.Height}")).ToArray();
 }
 
 internal sealed class CaptureSelection : Form
@@ -84,6 +96,9 @@ internal sealed class CaptureSelection : Form
     private readonly Size fixedSize;
     private readonly Rectangle desktop;
     private readonly Bitmap background;
+    private readonly CaptureTarget[] screens;
+    private readonly CaptureTarget[] windows;
+    private string? targetLabel;
     private readonly List<Point> points = [];
     private Point anchor;
     private Point current;
@@ -95,14 +110,23 @@ internal sealed class CaptureSelection : Form
     private Rectangle selection;
     private string? selectionHint;
     private readonly Font infoFont = new("Microsoft YaHei UI", 9f);
-    public Rectangle SelectedBounds => new(selection.X + desktop.X, selection.Y + desktop.Y, selection.Width, selection.Height);
+    public Rectangle SelectedBounds => selection.IsEmpty ? Rectangle.Empty : new(selection.X + desktop.X, selection.Y + desktop.Y, selection.Width, selection.Height);
 
     public CaptureSelection(CaptureMode mode, Size fixedSize, bool includeCursor)
+        : this(mode, fixedSize, SystemInformation.VirtualScreen, null, CaptureTargets.Screens(),
+            mode == CaptureMode.ActiveWindow ? NativeCapture.SnapshotWindows() : [], includeCursor)
+    {
+    }
+
+    internal CaptureSelection(CaptureMode mode, Size fixedSize, Rectangle desktop, Bitmap? frozen,
+        CaptureTarget[] screens, CaptureTarget[] windows, bool includeCursor = false)
     {
         this.mode = mode;
-        desktop = SystemInformation.VirtualScreen;
+        this.desktop = desktop;
+        this.screens = screens;
+        this.windows = windows;
         this.fixedSize = new Size(Math.Clamp(fixedSize.Width, 1, desktop.Width), Math.Clamp(fixedSize.Height, 1, desktop.Height));
-        background = CaptureEngine.CaptureScreen(desktop, includeCursor);
+        background = frozen == null ? CaptureEngine.CaptureScreen(desktop, includeCursor) : new Bitmap(frozen);
         FormBorderStyle = FormBorderStyle.None;
         AutoScaleMode = AutoScaleMode.None;
         StartPosition = FormStartPosition.Manual;
@@ -140,7 +164,15 @@ internal sealed class CaptureSelection : Form
 
     private void UpdateSelection()
     {
-        if (mode == CaptureMode.FixedRegion)
+        if (mode is CaptureMode.FullScreen or CaptureMode.ActiveWindow)
+        {
+            var target = CaptureTargets.AtPoint(mode == CaptureMode.FullScreen ? screens : windows,
+                new Point(current.X + desktop.X, current.Y + desktop.Y));
+            targetLabel = target?.Label;
+            selection = target == null ? Rectangle.Empty : Rectangle.Intersect(target.Bounds, desktop);
+            if (!selection.IsEmpty) selection.Offset(-desktop.X, -desktop.Y);
+        }
+        else if (mode == CaptureMode.FixedRegion)
         {
             selection = new Rectangle(
                 Math.Clamp(current.X - fixedSize.Width / 2, 0, desktop.Width - fixedSize.Width),
@@ -182,7 +214,7 @@ internal sealed class CaptureSelection : Form
         if (e.Button == MouseButtons.Right) { CancelSelection(); return; }
         if (e.Button != MouseButtons.Left) return;
         current = Constrain(e.Location);
-        if (mode is CaptureMode.FixedRegion or CaptureMode.WindowObject)
+        if (mode is CaptureMode.FixedRegion or CaptureMode.WindowObject or CaptureMode.FullScreen or CaptureMode.ActiveWindow)
         {
             UpdateSelection();
             AcceptSelection();
@@ -220,7 +252,19 @@ internal sealed class CaptureSelection : Form
         var key = keyData & Keys.KeyCode;
         if (key == Keys.Escape) { CancelSelection(); return true; }
         if (key == Keys.F1) { showHelp = !showHelp; Invalidate(); return true; }
-        if (key == Keys.Tab) { adjustAnchor = !adjustAnchor; Invalidate(); return true; }
+        if (key == Keys.Tab)
+        {
+            if (mode == CaptureMode.FullScreen && screens.Length > 0)
+            {
+                int index = Array.FindIndex(screens, screen => screen.Bounds == SelectedBounds);
+                int direction = (keyData & Keys.Shift) != 0 ? -1 : 1;
+                var next = screens[(index + direction + screens.Length) % screens.Length].Bounds;
+                current = new Point(next.Left + next.Width / 2 - desktop.Left, next.Top + next.Height / 2 - desktop.Top);
+                UpdateSelection();
+            }
+            else { adjustAnchor = !adjustAnchor; Invalidate(); }
+            return true;
+        }
         if (key is Keys.Enter or Keys.Space)
         {
             if (mode == CaptureMode.Freehand)
@@ -320,7 +364,7 @@ internal sealed class CaptureSelection : Form
             using var pen = new Pen(Color.Coral, 2);
             g.DrawLines(pen, points.ToArray());
         }
-        DrawMagnifier(g);
+        if (mode is not (CaptureMode.FullScreen or CaptureMode.ActiveWindow)) DrawMagnifier(g);
         if (showHelp) DrawHelp(g);
     }
 
@@ -362,19 +406,29 @@ internal sealed class CaptureSelection : Form
         {
             CaptureMode.Freehand => "手绘区域：单击添加点或按住鼠标绘制，Enter / 双击完成",
             CaptureMode.WindowObject => "窗口 / 对象：移动鼠标选择窗口或控件，单击捕捉",
+            CaptureMode.ActiveWindow => "窗口截图：移动鼠标高亮完整窗口，单击捕捉",
+            CaptureMode.FullScreen => "选择屏幕：移动鼠标高亮显示器，单击确认",
             CaptureMode.FixedRegion => $"固定区域 {fixedSize.Width} × {fixedSize.Height}：单击捕捉",
             _ => "矩形区域：拖动选择，或依次点击两个角点"
         };
         var screen = Screen.FromPoint(new Point(current.X + desktop.X, current.Y + desktop.Y));
         var help = new Rectangle(screen.WorkingArea.Left - desktop.Left + 16, screen.WorkingArea.Top - desktop.Top + 16,
-            Math.Min(660, screen.WorkingArea.Width - 32), 64);
+            Math.Min(760, screen.WorkingArea.Width - 32), mode is CaptureMode.FullScreen or CaptureMode.ActiveWindow ? 92 : 64);
         using var brush = new SolidBrush(BrandTheme.Ink);
         g.FillRectangle(brush, help);
         TextRenderer.DrawText(g, title, infoFont, new Rectangle(help.X + 12, help.Y + 8, help.Width - 24, 22), Color.White);
-        string detail = selectionHint ?? (mode == CaptureMode.Freehand
+        string detail = selectionHint ?? (mode == CaptureMode.FullScreen
+            ? "Tab / Shift+Tab 切换屏幕 · Enter 确认 · Esc / 右键取消"
+            : mode == CaptureMode.ActiveWindow
+            ? "单击 / Enter 确认 · 仅捕捉当前可见内容 · Esc / 右键取消"
+            : mode == CaptureMode.Freehand
             ? "Space 添加点 · Enter / 双击完成 · F1 隐藏提示 · Esc / 右键取消"
             : "方向键微调 · Shift+方向键 10 px · Tab 切换角点 · F1 隐藏提示 · Esc / 右键取消");
         TextRenderer.DrawText(g, detail, infoFont, new Rectangle(help.X + 12, help.Y + 34, help.Width - 24, 22), Color.FromArgb(198, 208, 224));
+        if (mode is CaptureMode.FullScreen or CaptureMode.ActiveWindow)
+            TextRenderer.DrawText(g, targetLabel ?? "将鼠标移到要捕捉的目标上", infoFont,
+                new Rectangle(help.X + 12, help.Y + 62, help.Width - 24, 22), Color.White,
+                TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
     }
 
     protected override void Dispose(bool disposing)
@@ -435,6 +489,9 @@ internal static class NativeCapture
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsIconic(IntPtr handle);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr handle);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr param);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr handle, StringBuilder text, int count);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr64(IntPtr handle, int index);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong32(IntPtr handle, int index);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr handle, out NativeRect rect);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr handle, int attribute, out NativeRect rect, int size);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr handle, int attribute, out int value, int size);
@@ -452,13 +509,37 @@ internal static class NativeCapture
         return Rectangle.FromLTRB(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom);
     }
 
+    internal static CaptureTarget[] SnapshotWindows()
+    {
+        var targets = new List<CaptureTarget>();
+        EnumWindows((handle, _) =>
+        {
+            if (!IsSelectableWindow(handle)) return true;
+            var bounds = Rectangle.Intersect(WindowBounds(handle), SystemInformation.VirtualScreen);
+            if (bounds.Width <= 0 || bounds.Height <= 0) return true;
+            var title = new StringBuilder(512);
+            GetWindowText(handle, title, title.Capacity);
+            targets.Add(new CaptureTarget(bounds, $"{(title.Length > 0 ? title.ToString() : "窗口")} · {bounds.Width} × {bounds.Height}"));
+            return true;
+        }, IntPtr.Zero);
+        return targets.ToArray();
+    }
+
+    private static bool IsSelectableWindow(IntPtr handle)
+    {
+        if (!IsWindowVisible(handle) || IsIconic(handle)) return false;
+        long style = IntPtr.Size == 8 ? GetWindowLongPtr64(handle, -20).ToInt64() : GetWindowLong32(handle, -20);
+        // Click-through cursor/recording overlays are not the window the user is pointing at.
+        if ((style & 0x20 /* WS_EX_TRANSPARENT */) != 0) return false;
+        return DwmGetWindowAttribute(handle, 14, out int cloaked, sizeof(int)) != 0 || cloaked == 0;
+    }
+
     internal static Rectangle FindUnderlyingWindow(Point point, IntPtr overlay)
     {
         IntPtr found = IntPtr.Zero;
         EnumWindows((handle, _) =>
         {
-            if (handle == overlay || !IsWindowVisible(handle) || IsIconic(handle)) return true;
-            if (DwmGetWindowAttribute(handle, 14, out int cloaked, sizeof(int)) == 0 && cloaked != 0) return true;
+            if (handle == overlay || !IsSelectableWindow(handle)) return true;
             var bounds = WindowBounds(handle);
             if (!bounds.Contains(point)) return true;
             found = handle;

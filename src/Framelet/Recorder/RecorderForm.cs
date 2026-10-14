@@ -8,6 +8,7 @@ public sealed partial class RecorderForm : Form
     private readonly RadioButton fullScreen = new() { Text = "全屏", Checked = true, AutoSize = true };
     private readonly RadioButton region = new() { Text = "矩形区域", AutoSize = true };
     private readonly Button selectArea = new() { Text = "选择区域…", Width = 100 };
+    private readonly Button selectScreen = new() { Text = "选择屏幕…", Width = 100 };
     private readonly Label areaLabel = new() { AutoSize = false, TextAlign = ContentAlignment.MiddleLeft };
     private readonly NumericUpDown frameRate = new() { Minimum = 1, Maximum = 60, Value = 15, Width = 58 };
     private readonly CheckBox includeCursor = new() { Text = "录制鼠标指针", Checked = true, AutoSize = true };
@@ -29,6 +30,7 @@ public sealed partial class RecorderForm : Form
     private RecordingControlBar? controlBar;
     private RecordingBoundary? boundary;
     private Rectangle? selectedBounds;
+    private Rectangle? selectedScreenBounds;
     private ScreenRecordingSession? session;
     private string? lastSavedVideo;
     private RecorderPreferences preferences;
@@ -62,6 +64,7 @@ public sealed partial class RecorderForm : Form
         region.CheckedChanged += (_, _) => { if (region.Checked) fullScreen.Checked = false; RefreshArea(); };
         fullScreen.Checked = !region.Checked;
         selectArea.Click += async (_, _) => await SelectRegionAsync();
+        selectScreen.Click += async (_, _) => await SelectRegionAsync(chooseScreen: true);
         extensionButton.Click += async (_, _) => await ConfigureAudioAsync();
         audioDevice.SelectedIndexChanged += (_, _) => RefreshReadyStatus();
         startButton.Click += async (_, _) => await StartRecordingAsync();
@@ -83,14 +86,16 @@ public sealed partial class RecorderForm : Form
 
     private void RefreshArea()
     {
-        var bounds = region.Checked ? selectedBounds : (Screen.PrimaryScreen?.Bounds ?? SystemInformation.VirtualScreen);
+        var bounds = region.Checked ? selectedBounds : selectedScreenBounds;
         areaLabel.Text = bounds is { } rectangle
-            ? $"{(region.Checked ? "矩形区域" : "主显示器")}：{rectangle.Width} × {rectangle.Height} 像素  ({rectangle.X}, {rectangle.Y})"
-            : "请点击“选择区域”，拖动鼠标选择需要录制的范围。";
+            ? $"{(region.Checked ? "矩形区域" : "已选屏幕")}：{rectangle.Width} × {rectangle.Height} 像素  ({rectangle.X}, {rectangle.Y})"
+            : region.Checked ? "请点击“选择区域”，拖动鼠标选择需要录制的范围。"
+                : "请点击“选择屏幕”，点选需要录制的显示器。";
         selectArea.Enabled = region.Checked;
+        selectScreen.Enabled = fullScreen.Checked;
     }
 
-    private async Task SelectRegionAsync()
+    private async Task SelectRegionAsync(bool chooseScreen = false)
     {
         if (busy || checkingEngine || selectingRegion || IsDisposed || Disposing) return;
         selectingRegion = true;
@@ -107,12 +112,23 @@ public sealed partial class RecorderForm : Form
             await Task.Delay(transitionsDisabled ? 80 : 350);
             if (IsDisposed || Disposing) return;
             DwmFlush();
-            using var picker = new RecordingRegionPicker();
-            if (picker.ShowDialog() == DialogResult.OK)
+            if (chooseScreen)
             {
-                if (IsDisposed || Disposing) return;
-                selectedBounds = picker.SelectedBounds;
-                region.Checked = true;
+                if (CaptureEngine.SelectScreenBounds() is { } screenBounds)
+                {
+                    selectedScreenBounds = screenBounds;
+                    fullScreen.Checked = true;
+                }
+            }
+            else
+            {
+                using var picker = new RecordingRegionPicker();
+                if (picker.ShowDialog() == DialogResult.OK)
+                {
+                    if (IsDisposed || Disposing) return;
+                    selectedBounds = picker.SelectedBounds;
+                    region.Checked = true;
+                }
             }
         }
         catch (Exception ex) { failure = ex; }
@@ -189,6 +205,12 @@ public sealed partial class RecorderForm : Form
             await SelectRegionAsync();
             if (selectedBounds is null || IsDisposed || Disposing) return;
         }
+        if (fullScreen.Checked && (selectedScreenBounds is null || !Screen.AllScreens.Any(screen => screen.Bounds == selectedScreenBounds)))
+        {
+            selectedScreenBounds = null;
+            await SelectRegionAsync(chooseScreen: true);
+            if (selectedScreenBounds is null || IsDisposed || Disposing) return;
+        }
         busy = true;
         SetButtons();
         try
@@ -198,7 +220,7 @@ public sealed partial class RecorderForm : Form
             var selectedAudio = audioDevice.SelectedIndex > 0 ? audioDevice.SelectedItem?.ToString() : null;
             if (selectedAudio is not null)
                 resolvedEngine = await FFmpegLocator.CheckAvailableAsync(preferences.FFmpegPath);
-            var bounds = region.Checked ? selectedBounds!.Value : (Screen.PrimaryScreen?.Bounds ?? SystemInformation.VirtualScreen);
+            var bounds = region.Checked ? selectedBounds!.Value : selectedScreenBounds!.Value;
             preferences.FramesPerSecond = (int)frameRate.Value;
             preferences.IncludeCursor = includeCursor.Checked;
             preferences.MinimizeOnStart = minimize.Checked;
@@ -332,7 +354,7 @@ public sealed partial class RecorderForm : Form
     {
         if (session is null) return;
         controlBar?.UpdateState(session.State, session.RecordedTime, busy, session.CanResume, hotkeyPause, hotkeyStop);
-        boundary?.SetPaused(session.State != RecordingState.Recording);
+        boundary?.UpdateState(session.State);
     }
 
     private void CloseRecordingOverlays()

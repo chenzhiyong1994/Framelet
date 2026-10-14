@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Framelet;
 
 /// <summary>Selection geometry and explicit recording discard, without showing UI or capturing the desktop.</summary>
@@ -6,13 +8,84 @@ internal static class RecordingInteractionSelfTests
     public static async Task<IReadOnlyList<string>> RunAsync()
     {
         CheckSelectionGeometry();
+        CheckBoundaryGeometry();
+        CheckBoundaryStates();
         await CheckDiscardAsync().ConfigureAwait(false);
         return
         [
             "PASS Recording selection: reverse drag, corner and interior drag adjustments, 2 x 2 minimum, desktop boundaries and negative origins",
+            "PASS Recording boundary: dimensions and recording/paused status, click-through capture exclusion, full-screen and negative-origin edges",
             "PASS Recording discard: paused synthetic recording is removed; neighboring data survives; discarded recording cannot resume"
         ];
     }
+
+    private static void CheckBoundaryGeometry()
+    {
+        var desktop = new Rectangle(0, 0, 1920, 1080);
+        var region = RecordingBoundaryGeometry.Create(new Rectangle(100, 100, 320, 240), desktop, desktop, new Size(250, 30));
+        Equal(new Rectangle(100, 64, 320, 276), region.Window, "The recording badge sits above a region when there is space");
+        Equal(new Rectangle(0, 36, 320, 240), region.Capture, "The visible boundary preserves the exact recording coordinates");
+        Equal(new Rectangle(6, 0, 250, 30), region.Status, "The status fits without covering a normal recording area");
+
+        var full = RecordingBoundaryGeometry.Create(desktop, desktop, desktop, new Size(250, 30));
+        Equal(desktop, full.Window, "A full-screen recording keeps all four boundary edges on the chosen screen");
+        Equal(desktop, full.Capture, "Full-screen border edges are drawn inside the capture bounds instead of beyond the monitor");
+        Equal(new Rectangle(6, 8, 250, 30), full.Status, "The full-screen recording status remains on screen");
+
+        var secondary = new Rectangle(-1920, -240, 1920, 1080);
+        var multiple = new Rectangle(-1920, -240, 3840, 1320);
+        var negative = RecordingBoundaryGeometry.Create(secondary, multiple, secondary, new Size(250, 30));
+        Equal(secondary, negative.Window, "A secondary screen above and left of primary retains its negative origin");
+        Equal(new Rectangle(0, 0, 1920, 1080), negative.Capture, "Multi-monitor boundary geometry uses physical capture coordinates");
+        Equal(new Rectangle(6, 8, 250, 30), negative.Status, "A secondary screen status belongs to the selected monitor");
+
+        var small = RecordingBoundaryGeometry.Create(new Rectangle(1918, 1078, 2, 2), desktop, desktop, new Size(250, 30));
+        Equal(new Rectangle(1670, 1042, 250, 38), small.Window, "A 2 x 2 edge capture still has a readable status on screen");
+        Equal(new Rectangle(248, 36, 2, 2), small.Capture, "A tiny capture is not expanded to fit the status");
+    }
+
+    private static void CheckBoundaryStates()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                using var boundary = new RecordingBoundary(new Rectangle(200, 150, 320, 240));
+                Assert(boundary.AccessibleDescription?.Contains("320 × 240") == true,
+                    "The recording boundary identifies the exact capture dimensions");
+                boundary.SetPaused(false);
+                Assert(boundary.AccessibleDescription?.Contains("录制中") == true,
+                    "The boundary explicitly identifies an active recording");
+                boundary.SetPaused(true);
+                Assert(boundary.AccessibleDescription?.Contains("已暂停") == true,
+                    "Pausing updates the boundary state instead of only changing a color");
+                var inside = new Point(360 - boundary.Left, 300 - boundary.Top);
+                Assert(boundary.Region is not null && !boundary.Region.IsVisible(inside),
+                    "The capture interior stays transparent and available to the recorded application");
+                var before = boundary.Bounds;
+                boundary.SetPaused(false);
+                Equal(before, boundary.Bounds, "Pausing and resuming never moves the recording boundary");
+                long style = GetWindowLong(boundary.Handle, -20);
+                Assert((style & 0x080800A0) == 0x080800A0,
+                    "The boundary is layered, click-through, non-activating and excluded from the taskbar");
+                RecordingOverlayProtection.Exclude(boundary);
+                Assert(GetWindowDisplayAffinity(boundary.Handle, out uint affinity) && affinity == 0x11,
+                    "Windows excludes the entire border and status badge from captured frames");
+            }
+            catch (Exception ex) { failure = ex; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null) throw new InvalidOperationException("Recording boundary checks failed", failure);
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowDisplayAffinity(IntPtr window, out uint affinity);
 
     private static void CheckSelectionGeometry()
     {

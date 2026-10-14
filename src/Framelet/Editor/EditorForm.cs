@@ -97,9 +97,9 @@ public sealed class EditorForm : Form
         Item(file, "关闭当前图像", CloseCurrent, Keys.Control | Keys.W, "close");
         Item(file, "退出编辑器", Close, Keys.Alt | Keys.F4, null, false);
         foreach (var entry in new (string Text, CaptureMode Mode)[] {
-            ("活动窗口", CaptureMode.ActiveWindow), ("窗口 / 对象", CaptureMode.WindowObject),
+            ("点选窗口", CaptureMode.ActiveWindow), ("窗口 / 对象", CaptureMode.WindowObject),
             ("矩形区域", CaptureMode.Rectangle), ("手绘区域", CaptureMode.Freehand),
-            ("整个屏幕", CaptureMode.FullScreen), ("滚动窗口", CaptureMode.Scrolling),
+            ("点选屏幕", CaptureMode.FullScreen), ("滚动窗口", CaptureMode.Scrolling),
             ("固定大小区域", CaptureMode.FixedRegion), ("重复上次捕捉", CaptureMode.RepeatLast) })
             Item(capture, entry.Text, () => CaptureRequested?.Invoke(entry.Mode), Keys.None, null, false);
         capture.DropDownItems.Add(new ToolStripSeparator());
@@ -191,16 +191,22 @@ public sealed class EditorForm : Form
         var document = new EditorDocument(image, filePath);
         string name = filePath is null ? $"截图 {++imageSequence:000}" : Path.GetFileName(filePath);
         var page = new TabPage(name) { BackColor = BrandTheme.Canvas, Padding = Padding.Empty };
-        var canvas = new ImageCanvas { Dock = DockStyle.Fill, Document = document };
+        var canvas = new ImageCanvas
+        {
+            Dock = DockStyle.Fill, Document = document, AllowEdgeCropping = true,
+            AccessibleName = "图像编辑画布", AccessibleDescription = "拖动图像四边或四角直接裁切，松开应用；Esc 取消，Ctrl+Z 撤销。图像内部拖动选择区域。"
+        };
         page.Controls.Add(canvas);
         var imageTab = new ImageTab(document, canvas, page, name);
         images.Add(imageTab);
         canvas.SelectionChanged += (_, _) => UpdateState();
         canvas.ZoomChanged += (_, _) => UpdateState();
+        canvas.CropPreviewChanged += (_, _) => UpdateState();
         canvas.OperationFailed += ShowError;
         canvas.ImagePointerMoved += position =>
         {
-            if (Current == imageTab && !canvas.HasSelection) message.Text = $"{position.X}, {position.Y}    ·    拖动选择区域；Ctrl + 滚轮缩放";
+            if (Current == imageTab && !canvas.HasSelection && !canvas.IsCropping)
+                message.Text = $"{position.X}, {position.Y}    ·    拖动图像边缘直接裁切；内部拖动选择区域";
         };
         document.Changed += (_, _) => UpdateState();
         tabs.TabPages.Add(page); tabs.SelectedTab = page;
@@ -271,9 +277,11 @@ public sealed class EditorForm : Form
         var image = current.Document.Image;
         details.Text = $"{image.Width:N0} × {image.Height:N0} 像素";
         zoomStatus.Text = current.Canvas.Zoom == 1 ? "实际大小 · 100%" : $"缩放 {current.Canvas.Zoom:P0}";
-        message.Text = current.Canvas.HasSelection
+        message.Text = current.Canvas.IsCropping
+            ? $"保留 {current.Canvas.CropPreview.Width} × {current.Canvas.CropPreview.Height}    ·    松开鼠标裁切；Esc / 右键取消；裁切后 Ctrl+Z 撤销"
+            : current.Canvas.HasSelection
             ? $"选区 {current.Canvas.Selection.Width} × {current.Canvas.Selection.Height}    ·    可裁剪、复制或添加马赛克"
-            : "拖动选择区域；Ctrl + 滚轮缩放，中键拖动平移";
+            : "拖动图像边缘直接裁切；内部选择区域；Ctrl + 滚轮缩放，中键平移";
         Text = $"{current.Page.Text} — {BrandTheme.Name}";
     }
 
@@ -482,7 +490,7 @@ public sealed class EditorForm : Form
     }
 
     private void ShowHelp() => MessageBox.Show(this,
-        "Ctrl+O　打开图像\nCtrl+S　保存\nCtrl+Shift+S　另存为\nCtrl+C / X / V　复制 / 剪切选区 / 粘贴为新图像\nCtrl+Z / Y　撤销 / 重做\nCtrl+D　绘图与标注\nCtrl+R　裁剪到选区\nCtrl+M　调整大小\nCtrl+0　实际大小\nCtrl+9　适合窗口\nCtrl+Tab　切换图像\nCtrl+W　关闭图像\n\nCtrl + 滚轮缩放；中键拖动平移。\nGIF 和 TIFF 以首帧 / 首页静态图像编辑。PDF 仅支持导出。",
+        "Ctrl+O　打开图像\nCtrl+S　保存\nCtrl+Shift+S　另存为\nCtrl+C / X / V　复制 / 剪切选区 / 粘贴为新图像\nCtrl+Z / Y　撤销 / 重做\nCtrl+D　绘图与标注\nCtrl+R　裁剪到选区\nCtrl+M　调整大小\nCtrl+0　实际大小\nCtrl+9　适合窗口\nCtrl+Tab　切换图像\nCtrl+W　关闭图像\n\n拖动图像四边或四角裁切，松开应用；Esc / 右键取消。\nCtrl + 滚轮缩放；中键拖动平移。\nGIF 和 TIFF 以首帧 / 首页静态图像编辑。PDF 仅支持导出。",
         "编辑器快捷键", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void Run(Action action) { try { action(); } catch (Exception ex) { ShowError(ex); } }
@@ -490,7 +498,12 @@ public sealed class EditorForm : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (keyData == Keys.Escape) { Current?.Canvas.ClearSelection(); return true; }
+        if (keyData == Keys.Escape)
+        {
+            if (Current?.Canvas.IsCropping == true) Current.Canvas.CancelCrop();
+            else Current?.Canvas.ClearSelection();
+            return true;
+        }
         return base.ProcessCmdKey(ref msg, keyData);
     }
 

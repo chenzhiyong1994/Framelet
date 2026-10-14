@@ -28,9 +28,18 @@ public sealed partial class RecorderForm
         ConfigureRecorderGroup(captureGroup, "录制范围");
         var captureLayout = RecorderTable(1);
         captureLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        fullScreen.Text = "全屏（主显示器）";
-        fullScreen.Margin = new Padding(0, 0, 0, 5);
-        captureLayout.Controls.Add(fullScreen);
+        var screenRow = RecorderTable(2);
+        screenRow.Margin = new Padding(0, 0, 0, 5);
+        screenRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        screenRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        fullScreen.Text = "全屏";
+        fullScreen.Anchor = AnchorStyles.Left;
+        fullScreen.Margin = Padding.Empty;
+        ConfigureRecorderButton(selectScreen, "选择屏幕…");
+        selectScreen.Margin = new Padding(8, 0, 0, 0);
+        screenRow.Controls.Add(fullScreen, 0, 0);
+        screenRow.Controls.Add(selectScreen, 1, 0);
+        captureLayout.Controls.Add(screenRow);
 
         var regionRow = RecorderTable(2);
         regionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));

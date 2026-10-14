@@ -50,10 +50,73 @@ internal static class CaptureChecks
             Throws<ArgumentException>(() => CaptureGeometry.CropSelection(document, new Rectangle(0, 0, 50, 50), [new Point(0, 0), new Point(10, 10)]), "invalid freehand rejected");
             using var singlePixel = CaptureGeometry.CropSelection(document, new Rectangle(50, 50, 1, 1), null);
             Equal(singlePixel.GetPixel(0, 0).ToArgb(), document.GetPixel(50, 50).ToArgb(), "explicit one pixel crop is supported");
+            CheckTargetPicking();
             Console.WriteLine($"PASS: {checks} capture checks; no desktop input or screen acquisition performed.");
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+    }
+
+    private static void CheckTargetPicking()
+    {
+        CaptureTarget[] screens = [
+            new(new Rectangle(-160, -40, 160, 120), "屏幕 1"),
+            new(new Rectangle(0, 0, 200, 160), "屏幕 2")];
+        True(CaptureTargets.AtPoint(screens, new Point(-1, -1)) == screens[0], "negative-coordinate monitor can be selected");
+        True(CaptureTargets.AtPoint(screens, new Point(0, 0)) == screens[1], "shared boundary selects exactly one monitor");
+        True(CaptureTargets.AtPoint(screens, new Point(10, -20)) == null, "desktop gap does not select a monitor");
+        var desktop = new Rectangle(-160, -40, 360, 200);
+        using var frozen = new Bitmap(desktop.Width, desktop.Height);
+        using (var graphics = Graphics.FromImage(frozen)) graphics.Clear(Color.CornflowerBlue);
+        using var screenPicker = new CaptureSelection(CaptureMode.FullScreen, new Size(40, 30), desktop, frozen, screens, []);
+        Move(screenPicker, new Point(20, 30));
+        True(screenPicker.SelectedBounds == screens[0].Bounds, "hover highlights full selected monitor in physical desktop coordinates");
+        True(screenPicker.DialogResult == DialogResult.None, "hover does not capture automatically");
+        screenPicker.Shown += (_, _) => screenPicker.BeginInvoke(() => Click(screenPicker, new Point(20, 30)));
+        screenPicker.ShowDialog();
+        True(screenPicker.DialogResult == DialogResult.OK, "screen capture requires click confirmation");
+        using var selected = screenPicker.CreateSelectionBitmap();
+        True(selected.Size == new Size(160, 120), "screen capture contains only chosen monitor");
+        Equal(selected.GetPixel(20, 20).ToArgb(), Color.CornflowerBlue.ToArgb(), "highlight is not burned into captured image");
+
+        CaptureTarget[] windows = [new(new Rectangle(-130, -10, 70, 60), "Front"), new(new Rectangle(-140, -20, 180, 130), "Back")];
+        using var windowPicker = new CaptureSelection(CaptureMode.ActiveWindow, Size.Empty, desktop, frozen, screens, windows);
+        Move(windowPicker, new Point(40, 40));
+        True(windowPicker.SelectedBounds == windows[0].Bounds, "window hover selects topmost whole window");
+        windowPicker.Shown += (_, _) => windowPicker.BeginInvoke(() => Click(windowPicker, new Point(40, 40)));
+        windowPicker.ShowDialog();
+        True(windowPicker.DialogResult == DialogResult.OK, "window capture requires explicit click");
+        using var cancelPicker = new CaptureSelection(CaptureMode.FullScreen, Size.Empty, desktop, frozen, screens, []);
+        var keyMethod = typeof(CaptureSelection).GetMethod("ProcessCmdKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        cancelPicker.Shown += (_, _) => cancelPicker.BeginInvoke(() => keyMethod.Invoke(cancelPicker, [new Message(), Keys.Escape]));
+        cancelPicker.ShowDialog();
+        True(cancelPicker.DialogResult == DialogResult.Cancel, "Escape cancels target selection");
+        using var keyboardPicker = new CaptureSelection(CaptureMode.FullScreen, Size.Empty, desktop, frozen, screens, []);
+        Move(keyboardPicker, new Point(170, 20));
+        Click(keyboardPicker, new Point(170, 20));
+        True(keyboardPicker.SelectedBounds.IsEmpty && keyboardPicker.DialogResult == DialogResult.None, "clicking monitor gap cannot accept an empty target");
+        Move(keyboardPicker, new Point(20, 30));
+        keyMethod.Invoke(keyboardPicker, [new Message(), Keys.Tab]);
+        True(keyboardPicker.SelectedBounds == screens[1].Bounds, "Tab can select another monitor without moving physical cursor");
+        keyMethod.Invoke(keyboardPicker, [new Message(), Keys.Shift | Keys.Tab]);
+        True(keyboardPicker.SelectedBounds == screens[0].Bounds, "Shift+Tab cycles back to previous monitor");
+        using var transparentOverlay = new TransparentTestOverlay { Text = "Framelet transparent picker regression", Bounds = new Rectangle(100, 100, 200, 120), ShowInTaskbar = false };
+        transparentOverlay.Show();
+        True(!NativeCapture.SnapshotWindows().Any(target => target.Label.StartsWith(transparentOverlay.Text)), "pass-through overlay must not hide selectable windows");
+    }
+
+    private static void Move(Control control, Point point) => Mouse(control, "OnMouseMove", MouseButtons.None, point);
+    private static void Click(Control control, Point point) => Mouse(control, "OnMouseDown", MouseButtons.Left, point);
+    private static void Mouse(Control control, string method, MouseButtons button, Point point)
+        => typeof(CaptureSelection).GetMethod(method, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(control, [new MouseEventArgs(button, 1, point.X, point.Y, 0)]);
+
+    private sealed class TransparentTestOverlay : Form
+    {
+        protected override CreateParams CreateParams
+        {
+            get { var value = base.CreateParams; value.ExStyle |= 0x20; return value; }
+        }
     }
 
     private static Bitmap MakeDocument(int width, int height)
