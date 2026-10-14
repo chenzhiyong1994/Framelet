@@ -29,7 +29,9 @@ try {
         }
         & $DotnetPath publish $project -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $destination --nologo
         if ($LASTEXITCODE -ne 0) { throw '发布失败。' }
-        Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $destination 'README.md')
+        foreach ($readme in @('README.md', 'README.en.md')) {
+            Copy-Item -LiteralPath (Join-Path $projectRoot $readme) -Destination (Join-Path $destination $readme)
+        }
         foreach ($notice in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
             Copy-Item -LiteralPath (Join-Path $projectRoot $notice) -Destination (Join-Path $destination $notice) -Force
         }

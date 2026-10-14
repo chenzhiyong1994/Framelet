@@ -6,13 +6,13 @@ Framelet 使用 C#、Windows Forms 与 .NET 10，主项目为 `src/Framelet/Fram
 
 ## 项目官网
 
-官网是 `docs/index.html`、`docs/site.css` 和 `docs/site.js` 组成的静态页面，复用 `docs/images/` 的产品截图，不需要安装前端依赖。使用 Python 3 在仓库根目录启动预览：
+官网由中文 `docs/index.html`、英文 `docs/en.html`、共享的 `docs/site.css` 和 `docs/site.js` 组成，品牌封面与产品图片位于 `docs/images/`，不需要安装前端依赖。README 同样使用 `README.md` / `README.en.md` 静态互链。展示规范见[品牌文档](brand.md#readme-与项目主页)。使用 Python 3 在仓库根目录启动预览：
 
 ```powershell
 python -m http.server 8768 --bind 127.0.0.1 --directory docs
 ```
 
-访问 `http://127.0.0.1:8768/`。GitHub Pages 的发布源为 `main` 分支的 `/docs`，`.nojekyll` 保持原样发布；推送后由 GitHub 自动部署。更新应用版本时同步官网中的版本标记与真实截图，主要下载入口始终指向最新 Release。修改页面后检查桌面/窄屏布局、截图切换与放大、Esc 关闭、常见问题和下载链接。
+访问 `http://127.0.0.1:8768/` 或 `/en.html`。GitHub Pages 的发布源为 `main` 分支的 `/docs`，`.nojekyll` 保持原样发布；推送后由 GitHub 自动部署。更新应用版本时同步双语 README、官网版本与产品说明，主要下载入口始终指向最新 Release。修改页面后检查双语互链、桌面/窄屏布局、截图查看、键盘操作、常见问题和下载链接。
 
 ## 从源码构建与验证
 
@@ -23,7 +23,7 @@ python -m http.server 8768 --bind 127.0.0.1 --directory docs
 ./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish
 
 # 已有发布文件时，选择新的空目录
-./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.5.0
+./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.6.0
 
 # 图像、配置、格式、原生 MP4 编码和捕捉/拼接检查
 ./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe'
