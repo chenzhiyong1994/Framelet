@@ -20,6 +20,9 @@
     <Compile Include="StitchingChecks.cs.fixture" />
     <Compile Include="ScrollingCaptureChecks.cs.fixture" />
     <Compile Include="ScrollTargetChecks.cs.fixture" />
+    <Compile Include="NativeTextScrollChecks.cs.fixture" />
+    <Compile Include="BrowserReplayChecks.cs.fixture" />
+    <Content Include="Fixtures/BrowserScroll/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 </Project>

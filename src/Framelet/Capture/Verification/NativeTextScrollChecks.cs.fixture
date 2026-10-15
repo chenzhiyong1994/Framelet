@@ -1,0 +1,383 @@
+using Framelet;
+using System.Diagnostics;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+
+internal static class NativeTextScrollChecks
+{
+    internal static int Run()
+    {
+        int checks = 0;
+        using var fixture = new TextFixtureHost();
+        Rectangle region = fixture.Region;
+        WaitForFixture(fixture, region);
+        checks++;
+        var initial = fixture.Snapshot;
+        using var target = ScrollTarget.FromRegion(region);
+        var rootField = typeof(ScrollTarget).GetField("rootWindow",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var targetWindow = (IntPtr?)rootField?.GetValue(target) ?? IntPtr.Zero;
+        if (targetWindow != fixture.WindowHandle)
+            throw new InvalidOperationException($"Native text fixture refuses input to another window: target=0x{targetWindow.ToInt64():X}, fixture=0x{fixture.WindowHandle.ToInt64():X}.");
+        checks++;
+        using var trace = new CaptureTrace(region);
+        using var controller = new ScrollingCaptureWindow(region, trace.Capture,
+            () => target.Prepare(out var error) ? null : error,
+            () => target.ScrollDown(out var error) ? null : error,
+            sampleDelay: 180, nativeControls: true, targetPoint: target.Position);
+        Verify(initial.Position.Y == 0 && initial.FirstVisibleLine == 0, "native text starts at the first line");
+        using var watchdog = new System.Windows.Forms.Timer { Interval = 100 };
+        var elapsed = new Stopwatch();
+        bool observedRunning = false;
+        string? failure = null;
+        watchdog.Tick += (_, _) =>
+        {
+            observedRunning |= controller.IsRunning;
+            if (elapsed.Elapsed > TimeSpan.FromSeconds(45)) failure = "watchdog expired: " + controller.StatusText;
+            else if (observedRunning && !controller.IsRunning && controller.DialogResult != DialogResult.OK)
+                failure = "controller paused: " + controller.StatusText;
+            if (failure == null) return;
+            watchdog.Stop();
+            controller.DialogResult = DialogResult.Cancel;
+            controller.Close();
+        };
+        controller.Shown += (_, _) => { elapsed.Start(); watchdog.Start(); };
+        DialogResult outcome = controller.ShowDialog();
+        watchdog.Stop();
+        var final = fixture.Snapshot;
+        Verify(outcome == DialogResult.OK, $"native RichTextBox finishes automatically; {failure}; position={final.Position.Y}, firstLine={final.FirstVisibleLine}, wheelEvents={final.Steps.Length}");
+        int consecutive = 0, longest = 0, moved = 0;
+        foreach (var step in final.Steps)
+        {
+            if (step.After > step.Before)
+            {
+                moved++;
+                longest = Math.Max(longest, ++consecutive);
+            }
+            else consecutive = 0;
+        }
+        Verify(longest >= 3, "native text receives at least three consecutive downward wheel movements");
+        Verify(final.FirstVisibleLine > initial.FirstVisibleLine, "native first visible line independently confirms scrolling");
+        Verify(final.AtBottom, "native scrollbar independently confirms the bottom was reached");
+        Verify(controller.AcceptedFrames == moved + 1, "every native text movement produces one accepted frame");
+        using var result = controller.TakeResult();
+        Verify(result != null, "native text controller returns an image");
+        if (result != null)
+        {
+            int distance = final.Position.Y - initial.Position.Y;
+            Verify(result.Width == region.Width && result.Height == region.Height + distance,
+                $"native text output uses the exact EM_GETSCROLLPOS distance {distance}; actual={result.Size}, viewport={region.Size}");
+            string directory = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "scroll-native-text");
+            Directory.CreateDirectory(directory);
+            result.Save(Path.Combine(directory, "result.png"), ImageFormat.Png);
+            File.WriteAllText(Path.Combine(directory, "result.json"), JsonSerializer.Serialize(new
+            {
+                Region = region,
+                ResultSize = result.Size,
+                Distance = distance,
+                controller.AcceptedFrames,
+                Initial = initial,
+                Final = final
+            }, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        return checks;
+
+        void Verify(bool condition, string name)
+        {
+            if (!condition)
+            {
+                trace.SaveFailure(name, controller.StatusText, fixture.WindowHandle, targetWindow, fixture.Snapshot);
+                throw new InvalidOperationException("Native text scroll check failed: " + name);
+            }
+            checks++;
+        }
+    }
+
+    private static void WaitForFixture(TextFixtureHost fixture, Rectangle region)
+    {
+        object beforeActivation = fixture.WindowStateSnapshot;
+        bool raised = fixture.Activate();
+        IntPtr expected = fixture.WindowHandle;
+        bool activationRequested = SetForegroundWindow(expected);
+        var center = new NativePoint { X = region.Left + region.Width / 2, Y = region.Top + region.Height / 2 };
+        var elapsed = Stopwatch.StartNew();
+        IntPtr foreground, pointedWindow;
+        do
+        {
+            foreground = NativeCapture.GetForegroundWindow();
+            pointedWindow = GetAncestor(WindowFromPoint(center), 2);
+            if (foreground == expected && pointedWindow == expected) return;
+            Application.DoEvents();
+            Thread.Sleep(15);
+        } while (elapsed.Elapsed < TimeSpan.FromSeconds(3));
+        string directory = CreateFailureDirectory();
+        string diagnostic = JsonSerializer.Serialize(new
+        {
+            Failure = "Fixture did not become the foreground window under the capture region",
+            Region = region,
+            FixtureWindow = $"0x{expected.ToInt64():X}",
+            ForegroundWindow = $"0x{foreground.ToInt64():X}",
+            CenterWindow = $"0x{pointedWindow.ToInt64():X}",
+            Raised = raised,
+            ActivationRequested = activationRequested,
+            BeforeActivation = beforeActivation,
+            AfterActivation = fixture.WindowStateSnapshot
+        }, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(Path.Combine(directory, "readiness.json"), diagnostic);
+        throw new InvalidOperationException($"Native text fixture is not ready for capture: {diagnostic}");
+    }
+
+    private static string CreateFailureDirectory()
+    {
+        string directory = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "scroll-native-text",
+            "failure-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff'Z'"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private sealed class TextFixtureHost : IDisposable
+    {
+        private readonly ManualResetEventSlim ready = new();
+        private readonly Thread thread;
+        private Form? window;
+        private ObservedRichTextBox? text;
+        private Exception? startupError;
+
+        internal TextFixtureHost()
+        {
+            thread = new Thread(() =>
+            {
+                try
+                {
+                    using var font = new Font("Microsoft YaHei UI", 11f);
+                    using var form = new Form
+                    {
+                        Text = "Framelet native text scrolling verification",
+                        AutoScaleMode = AutoScaleMode.None,
+                        StartPosition = FormStartPosition.Manual,
+                        ClientSize = new Size(680, 320),
+                        Location = new Point(Screen.PrimaryScreen!.WorkingArea.Left + 48, Screen.PrimaryScreen.WorkingArea.Top + 64),
+                        TopMost = true
+                    };
+                    using var editor = new ObservedRichTextBox
+                    {
+                        Dock = DockStyle.Fill,
+                        BorderStyle = BorderStyle.None,
+                        Font = font,
+                        ReadOnly = true,
+                        DetectUrls = false,
+                        WordWrap = false,
+                        ScrollBars = RichTextBoxScrollBars.Vertical,
+                        BackColor = Color.White,
+                        ForeColor = Color.FromArgb(30, 38, 48),
+                        Text = MakeDocument()
+                    };
+                    window = form;
+                    text = editor;
+                    form.Controls.Add(editor);
+                    form.Shown += (_, _) =>
+                    {
+                        editor.Select(0, 0);
+                        editor.ScrollToCaret();
+                        editor.Focus();
+                        ready.Set();
+                    };
+                    Application.Run(form);
+                }
+                catch (Exception error)
+                {
+                    startupError = error;
+                    ready.Set();
+                }
+            }) { IsBackground = true, Name = "Framelet native text verification target" };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            if (!ready.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("Native text fixture did not open.");
+            if (startupError != null) throw new InvalidOperationException("Native text fixture failed to open.", startupError);
+        }
+
+        internal Rectangle Region => OnUi(() => text!.RectangleToScreen(Rectangle.Inflate(text.ClientRectangle, -4, -4)));
+        internal IntPtr WindowHandle => OnUi(() => window!.Handle);
+        internal TextSnapshot Snapshot => OnUi(() => text!.ReadSnapshot());
+        internal object WindowStateSnapshot => OnUi<object>(() =>
+        {
+            var form = window!;
+            bool hasBounds = GetWindowRect(form.Handle, out var bounds);
+            int cloakResult = DwmGetWindowAttribute(form.Handle, 14, out int cloaked, sizeof(int));
+            GetStartupInfo(out var startup);
+            return new
+            {
+                form.Visible,
+                WindowState = form.WindowState.ToString(),
+                form.Bounds,
+                form.TopMost,
+                form.Enabled,
+                form.Opacity,
+                form.IsHandleCreated,
+                form.IsDisposed,
+                Application.MessageLoop,
+                NativeVisible = IsWindowVisible(form.Handle),
+                NativeTopMost = (GetWindowLong(form.Handle, -20) & 8) != 0,
+                NativeBounds = hasBounds ? Rectangle.FromLTRB(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom) : (Rectangle?)null,
+                DwmCloakResult = cloakResult,
+                DwmCloaked = cloakResult == 0 ? cloaked : (int?)null,
+                StartupFlags = startup.Flags,
+                StartupShowWindow = startup.ShowWindow
+            };
+        });
+        internal bool Activate() => OnUi(() =>
+        {
+            bool raised = SetWindowPos(window!.Handle, new IntPtr(-1), 0, 0, 0, 0, 0x13);
+            window.Activate();
+            text!.Focus();
+            return raised;
+        });
+        private T OnUi<T>(Func<T> callback) => (T)window!.Invoke(callback)!;
+
+        public void Dispose()
+        {
+            if (window is { IsDisposed: false }) window.Invoke(() => window.Close());
+            thread.Join(3000);
+            ready.Dispose();
+        }
+    }
+
+    private static string MakeDocument()
+    {
+        string[] phrases = [
+            "保持原始字体与段落间距 / Preserve native text layout",
+            "逐行检查截图中的编号 / Verify the original line numbers",
+            "窗口位置保持不变 / Keep this target window in place",
+            "向下滚动采集新内容 / Capture the next document section",
+            "独立读取实际像素位移 / Inspect the native scroll position",
+            "正文内容不可遗漏或重复 / Keep every line exactly once",
+            "中英文混合排版验证 / Validate bilingual text rendering",
+            "底部静止后自动完成 / Finish when the document stops"];
+        return string.Join('\n', Enumerable.Range(1, 40).Select(index =>
+            $"{index:D3}  {unchecked((uint)index * 2654435761U):X8}  {phrases[(index - 1) % phrases.Length]}"));
+    }
+
+    private sealed class ObservedRichTextBox : RichTextBox
+    {
+        private readonly List<ScrollStep> steps = [];
+
+        internal TextSnapshot ReadSnapshot()
+        {
+            var information = new ScrollInformation { Size = (uint)Marshal.SizeOf<ScrollInformation>(), Mask = 7 };
+            bool read = GetScrollInfo(Handle, 1, ref information);
+            if (!read) throw new InvalidOperationException("Cannot read the native rich-text scrollbar.");
+            bool hasCaret = GetCaretPos(out var caret);
+            return new TextSnapshot(ReadPosition(), SendMessage(Handle, 0x00CE, IntPtr.Zero, IntPtr.Zero).ToInt32(),
+                information.Position >= information.Maximum - (int)information.Page + 1, steps.ToArray(),
+                Focused, hasCaret ? new Point(caret.X, caret.Y) : null);
+        }
+
+        private Point ReadPosition()
+        {
+            var position = new NativePoint();
+            if (SendMessage(Handle, 0x04DD, IntPtr.Zero, ref position) == IntPtr.Zero)
+                throw new InvalidOperationException("Cannot read EM_GETSCROLLPOS from the native RichTextBox.");
+            return new Point(position.X, position.Y);
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            bool wheel = message.Msg == 0x020A;
+            int before = wheel ? ReadPosition().Y : 0;
+            base.WndProc(ref message);
+            if (wheel) steps.Add(new ScrollStep(before, ReadPosition().Y));
+        }
+    }
+
+    private sealed class CaptureTrace(Rectangle region) : IDisposable
+    {
+        private readonly Stopwatch elapsed = Stopwatch.StartNew();
+        private readonly List<object> samples = [];
+        private Bitmap? first;
+        private Bitmap? previous;
+        private Bitmap? last;
+
+        internal Bitmap Capture()
+        {
+            var bitmap = CaptureEngine.CaptureScreen(region);
+            try
+            {
+                first ??= new Bitmap(bitmap);
+                previous?.Dispose();
+                previous = last;
+                last = new Bitmap(bitmap);
+                samples.Add(new
+                {
+                    Index = samples.Count,
+                    Milliseconds = elapsed.ElapsedMilliseconds,
+                    ForegroundWindow = $"0x{NativeCapture.GetForegroundWindow().ToInt64():X}",
+                    Pointer = Cursor.Position
+                });
+                return bitmap;
+            }
+            catch { bitmap.Dispose(); throw; }
+        }
+
+        internal void SaveFailure(string failure, string status, IntPtr fixtureWindow, IntPtr targetWindow, TextSnapshot snapshot)
+        {
+            string directory = CreateFailureDirectory();
+            first?.Save(Path.Combine(directory, "first.png"), ImageFormat.Png);
+            previous?.Save(Path.Combine(directory, "previous.png"), ImageFormat.Png);
+            last?.Save(Path.Combine(directory, "last.png"), ImageFormat.Png);
+            var diagnostic = new
+            {
+                Failure = failure,
+                Status = status,
+                Region = region,
+                FixtureWindow = $"0x{fixtureWindow.ToInt64():X}",
+                TargetWindow = $"0x{targetWindow.ToInt64():X}",
+                Snapshot = snapshot,
+                Samples = samples
+            };
+            File.WriteAllText(Path.Combine(directory, "diagnostic.json"), JsonSerializer.Serialize(diagnostic,
+                new JsonSerializerOptions { WriteIndented = true }));
+        }
+
+        public void Dispose()
+        {
+            first?.Dispose();
+            previous?.Dispose();
+            last?.Dispose();
+        }
+    }
+
+    private readonly record struct ScrollStep(int Before, int After);
+    private readonly record struct TextSnapshot(Point Position, int FirstVisibleLine, bool AtBottom, ScrollStep[] Steps, bool Focused, Point? CaretPosition);
+    [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] private struct NativeRectangle { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct StartupInformation
+    {
+        public uint Size;
+        public IntPtr Reserved, Desktop, Title;
+        public uint X, Y, Width, Height, CharacterWidth, CharacterHeight, FillAttribute, Flags;
+        public ushort ShowWindow, ReservedSize;
+        public IntPtr ReservedData, StandardInput, StandardOutput, StandardError;
+    }
+    [StructLayout(LayoutKind.Sequential)] private struct ScrollInformation
+    {
+        public uint Size, Mask;
+        public int Minimum, Maximum;
+        public uint Page;
+        public int Position, TrackPosition;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr parameter, IntPtr extraParameter);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr parameter, ref NativePoint point);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetScrollInfo(IntPtr window, int bar, ref ScrollInformation information);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetCaretPos(out NativePoint point);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(NativePoint point);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int left, int top, int width, int height, uint flags);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr window, out NativeRectangle bounds);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
+    [DllImport("kernel32.dll", EntryPoint = "GetStartupInfoW")] private static extern void GetStartupInfo(out StartupInformation information);
+}

@@ -1,0 +1,196 @@
+using Framelet;
+using System.Diagnostics;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+
+internal static class BrowserReplayChecks
+{
+    internal static int Run(string directory)
+    {
+        int checks = 0;
+        string root = Path.GetFullPath(directory);
+        string manifestPath = Path.Combine(root, "manifest.json");
+        var manifest = JsonSerializer.Deserialize<ReplayManifest>(File.ReadAllText(manifestPath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Browser replay manifest is empty: " + manifestPath);
+        Verify(manifest.ViewportWidth > 0 && manifest.ViewportHeight > 0, "manifest has positive viewport dimensions");
+        Verify(manifest.Frames is { Count: >= 2 }, "manifest contains at least two browser frames");
+        var frames = new List<Bitmap>();
+        try
+        {
+            string prefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
+            foreach (var entry in manifest.Frames)
+            {
+                Verify(!string.IsNullOrWhiteSpace(entry.Name), "frame has a file name");
+                string path = Path.GetFullPath(Path.Combine(root, entry.Name));
+                Verify(path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase), "frame stays inside the replay directory");
+                var bitmap = new Bitmap(path);
+                frames.Add(bitmap);
+                Verify(bitmap.Width == manifest.ViewportWidth && bitmap.Height == manifest.ViewportHeight,
+                    entry.Name + " dimensions match the recorded viewport");
+                Verify(entry.Offset >= 0, entry.Name + " has a nonnegative recorded offset");
+            }
+
+            using var session = new ScrollCaptureSession();
+            for (int index = 0; index < frames.Count; index++)
+            {
+                if (index > 0)
+                {
+                    int distance = manifest.Frames[index].Offset - manifest.Frames[index - 1].Offset;
+                    Verify(distance > 0, "recorded browser offsets increase strictly");
+                    var match = ImageStitcher.Analyze(frames[index - 1], frames[index]);
+                    Verify(match.Status == ScrollMatchStatus.Matched && match.VerticalShift == distance,
+                        $"{manifest.Frames[index - 1].Name} -> {manifest.Frames[index].Name}: expected shift {distance}, actual {match}");
+                }
+                var appended = session.Append(frames[index]);
+                Verify(appended.Status == ScrollMatchStatus.Matched, manifest.Frames[index].Name + " appends as genuine new content");
+            }
+            int expectedHeight = checked(manifest.ViewportHeight + manifest.Frames[^1].Offset - manifest.Frames[0].Offset);
+            Verify(session.Width == manifest.ViewportWidth && session.Height == expectedHeight,
+                "direct browser replay dimensions equal the viewport plus actual scrolling");
+            Verify(session.FrameCount == frames.Count, "direct browser replay accepts every recorded frame");
+            using var expected = session.ToBitmap();
+            CheckFullPageReference(root, expected, Verify);
+            CheckController(frames, manifest, expected, Verify);
+            string artifacts = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "scroll-browser");
+            Directory.CreateDirectory(artifacts);
+            expected.Save(Path.Combine(artifacts, "replay-result.png"), ImageFormat.Png);
+            return checks;
+        }
+        finally
+        {
+            foreach (var frame in frames) frame.Dispose();
+        }
+
+        void Verify(bool condition, string name)
+        {
+            if (!condition) throw new InvalidOperationException("Browser replay check failed: " + name);
+            checks++;
+        }
+    }
+
+    private static void CheckFullPageReference(string directory, Bitmap actual, Action<bool, string> verify)
+    {
+        string referencePath = Path.Combine(directory, "reference.png");
+        string regionsPath = Path.Combine(directory, "reference-regions.json");
+        verify(File.Exists(referencePath) && File.Exists(regionsPath), "independent full-page reference and text regions are present");
+        using var reference = new Bitmap(referencePath);
+        var regions = JsonSerializer.Deserialize<List<ReferenceRegion>>(File.ReadAllText(regionsPath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Browser reference regions are empty: " + regionsPath);
+        verify(reference.Width <= actual.Width && reference.Height == actual.Height,
+            "full-page reference has the complete stitched height and fits the content width");
+        verify(regions.Count > 0, "full-page reference contains independently located text regions");
+        var referenceBounds = new Rectangle(Point.Empty, reference.Size);
+        for (int index = 0; index < regions.Count; index++)
+        {
+            var region = regions[index];
+            var bounds = new Rectangle(region.X, region.Y, region.Width, region.Height);
+            verify(bounds.Width > 0 && bounds.Height > 0 && referenceBounds.Contains(bounds),
+                $"reference text region {index + 1} lies inside the full-page image");
+            string? difference = PixelDifference(reference, actual, bounds);
+            verify(difference == null, $"independent text region {index + 1} {bounds} preserves every original pixel; {difference}");
+        }
+    }
+
+    private static void CheckController(IReadOnlyList<Bitmap> frames, ReplayManifest manifest,
+        Bitmap expected, Action<bool, string> verify)
+    {
+        int frameIndex = 0;
+        int scrollCalls = 0;
+        bool prepared = false;
+        using var controller = new ScrollingCaptureWindow(
+            new Rectangle(0, 0, manifest.ViewportWidth, manifest.ViewportHeight),
+            () => frames[frameIndex].Clone(new Rectangle(Point.Empty, frames[frameIndex].Size), PixelFormat.Format32bppArgb),
+            () => { prepared = true; return null; },
+            () =>
+            {
+                scrollCalls++;
+                frameIndex = Math.Min(frameIndex + 1, frames.Count - 1);
+                return null;
+            }, sampleDelay: 1, nativeControls: false);
+        using var watchdog = new System.Windows.Forms.Timer { Interval = 50 };
+        var elapsed = new Stopwatch();
+        string? failure = null;
+        watchdog.Tick += (_, _) =>
+        {
+            if (elapsed.Elapsed > TimeSpan.FromSeconds(30)) failure = "watchdog expired: " + controller.StatusText;
+            else if (prepared && !controller.IsRunning && controller.DialogResult != DialogResult.OK)
+                failure = "controller paused: " + controller.StatusText;
+            if (failure == null) return;
+            watchdog.Stop();
+            controller.DialogResult = DialogResult.Cancel;
+            controller.Close();
+        };
+        controller.Shown += (_, _) => { elapsed.Start(); watchdog.Start(); };
+        DialogResult outcome = controller.ShowDialog();
+        watchdog.Stop();
+        verify(outcome == DialogResult.OK, "real browser frame replay finishes automatically; " + failure);
+        verify(controller.AcceptedFrames == frames.Count, "controller accepts every real browser frame exactly once");
+        verify(frameIndex == frames.Count - 1 && scrollCalls == frames.Count + 2,
+            "controller reaches the last browser frame and confirms the unchanged bottom three times");
+        using var actual = controller.TakeResult();
+        verify(actual != null, "controller returns an owned browser replay image");
+        if (actual == null) return;
+        verify(actual.Size == expected.Size, "controller result dimensions match direct browser replay");
+        verify(PixelsEqual(expected, actual), "controller result preserves every pixel of the direct browser replay");
+    }
+
+    private static bool PixelsEqual(Bitmap expected, Bitmap actual)
+    {
+        if (expected.Size != actual.Size) return false;
+        return PixelDifference(expected, actual, new Rectangle(Point.Empty, expected.Size)) == null;
+    }
+
+    private static string? PixelDifference(Bitmap expected, Bitmap actual, Rectangle bounds)
+    {
+        var expectedData = expected.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var actualData = actual.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                var expectedRow = new int[bounds.Width];
+                var actualRow = new int[bounds.Width];
+                string? firstDifference = null;
+                int changed = 0;
+                for (int row = 0; row < bounds.Height; row++)
+                {
+                    Marshal.Copy(IntPtr.Add(expectedData.Scan0, row * expectedData.Stride), expectedRow, 0, expectedRow.Length);
+                    Marshal.Copy(IntPtr.Add(actualData.Scan0, row * actualData.Stride), actualRow, 0, actualRow.Length);
+                    for (int column = 0; column < bounds.Width; column++)
+                    {
+                        if (expectedRow[column] == actualRow[column]) continue;
+                        changed++;
+                        firstDifference ??= $"first mismatch at ({bounds.Left + column}, {bounds.Top + row}): reference=0x{expectedRow[column]:X8}, stitched=0x{actualRow[column]:X8}";
+                    }
+                }
+                return firstDifference == null ? null : $"{firstDifference}; {changed} of {bounds.Width * bounds.Height} pixels differ";
+            }
+            finally { actual.UnlockBits(actualData); }
+        }
+        finally { expected.UnlockBits(expectedData); }
+    }
+
+    private sealed class ReplayManifest
+    {
+        public int ViewportWidth { get; set; }
+        public int ViewportHeight { get; set; }
+        public List<ReplayFrame> Frames { get; set; } = [];
+    }
+
+    private sealed class ReplayFrame
+    {
+        public string Name { get; set; } = string.Empty;
+        public int Offset { get; set; }
+    }
+
+    private sealed class ReferenceRegion
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+    }
+}

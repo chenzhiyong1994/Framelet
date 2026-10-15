@@ -25,8 +25,16 @@
 dotnet run --project src/Framelet/Capture/Verification/CaptureChecks.csproj
 ```
 
-独立项目默认执行合成图像、几何、选择和自动滚动控制流程检查，不读桌面、不发送系统输入。覆盖精确重叠、逐像素输出、固定栏、重复帧、拒绝不可靠匹配、增量所有权及暂停/继续/取消。点选回归使用合成背景短暂显示模态窗口，覆盖负坐标、屏幕空隙、窗口 Z 序、点击/取消和键盘切屏。
+独立项目默认执行合成图像、真实浏览器截图回放、几何、选择和自动滚动控制流程检查，不读桌面、不发送系统输入。覆盖精确重叠、逐像素输出、固定栏、重复帧、拒绝不可靠匹配、增量所有权及暂停/继续/取消。点选回归使用合成背景短暂显示模态窗口，覆盖负坐标、屏幕空隙、窗口 Z 序、点击/取消和键盘切屏。
+
+浏览器回放输入位于 `Verification/Fixtures/BrowserScroll`，页面源为 `Verification/scroll-browser.html`。9 帧由真实 Chromium 渲染，包含固定标题、阴影、重复卡片、唯一编号和鼠标悬停边框。`manifest.json` 记录实际 DOM 滚动位置；每一对匹配必须还原该位移，完整会话必须自动到底。`reference.png` 为独立整页截图，`reference-regions.json` 为 DOM 测得的正文区域，逐像素核对正文，不能以拼接结果自身作为正确性基准。单独运行：
+
+```powershell
+dotnet run --project src/Framelet/Capture/Verification/CaptureChecks.csproj -- --browser-replay src/Framelet/Capture/Verification/Fixtures/BrowserScroll
+```
+
+回放不依赖本机浏览器或字体，也不证明第三方浏览器的原生滚轮输入链路。重新采样时保持帧尺寸一致，记录真实滚动位置，并独立采集整页截图与文字边界。整页截图前将 `body.style.width` 锁定为原来的 `document.documentElement.clientWidth`，避免隐藏滚动条使居中正文重新布局；参考图与原视口中同一段文字应像素一致。不要用拼接输出覆盖参考图来消除失败。
 
 可选 `dotnet run --project src/Framelet/Capture/Verification/CaptureChecks.csproj -- --native-scroll` 会打开自有验证窗、移动鼠标并发送真实滚轮，检查屏幕采集与自动流程；运行期间不要同时操作桌面。
 
-运行时混合 DPI、多显示器、全局热键冲突和第三方软件兼容性仍需对应环境验证。屏幕采集无法还原被遮挡或受保护的内容。重复捕捉保留矩形边界，不保留自由路径。拼接处理同尺寸、向下滚动的静态内容，保留一份固定顶底栏；复杂重复纹理、动画或不连续画面会暂停，不将未验证的整帧直接追加。
+运行时混合 DPI、多显示器、全局热键冲突和第三方软件兼容性仍需对应环境验证。屏幕采集无法还原被遮挡或受保护的内容。重复捕捉保留矩形边界，不保留自由路径。拼接处理同尺寸、向下滚动的静态内容，保留一份固定顶底栏；至少需要识别到的滚动正文高度的四分之一重叠。对齐优先验证文字边缘，避免细悬停边框压过正文；局部文字检查防止重复模板中的编号差异被整体均值掩盖。复杂重复纹理、动态工具栏、动画或不连续画面仍可能暂停，不将未验证的整帧直接追加。

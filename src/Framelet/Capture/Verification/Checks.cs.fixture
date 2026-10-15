@@ -10,9 +10,20 @@ internal static class CaptureChecks
         try
         {
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            if (args.Contains("--native-text"))
+            {
+                Console.WriteLine($"PASS: {NativeTextScrollChecks.Run()} native text scrolling checks.");
+                return 0;
+            }
             if (args.Contains("--native-scroll"))
             {
-                Console.WriteLine($"PASS: {ScrollTargetChecks.Run()} native scrolling checks.");
+                Console.WriteLine($"PASS: {ScrollTargetChecks.Run() + NativeTextScrollChecks.Run()} native scrolling checks.");
+                return 0;
+            }
+            int browserReplay = Array.IndexOf(args, "--browser-replay");
+            if (browserReplay >= 0)
+            {
+                Console.WriteLine($"PASS: {BrowserReplayChecks.Run(args[browserReplay + 1])} recorded browser checks.");
                 return 0;
             }
             using var document = MakeDocument(160, 540);
@@ -57,6 +68,7 @@ internal static class CaptureChecks
             CheckScrollingLifetime();
             checks += StitchingChecks.Run();
             checks += ScrollingCaptureChecks.Run();
+            checks += BrowserReplayChecks.Run(Path.Combine(AppContext.BaseDirectory, "Fixtures", "BrowserScroll"));
             Console.WriteLine($"PASS: {checks} capture checks; no desktop input or screen acquisition performed.");
             return 0;
         }

@@ -1,0 +1,15 @@
+{
+  "viewportWidth": 1904,
+  "viewportHeight": 907,
+  "frames": [
+    {"name": "before.png", "offset": 0},
+    {"name": "after.png", "offset": 120},
+    {"name": "frame-02.png", "offset": 360},
+    {"name": "frame-03.png", "offset": 600},
+    {"name": "frame-04.png", "offset": 840},
+    {"name": "frame-05.png", "offset": 1080},
+    {"name": "frame-06.png", "offset": 1320},
+    {"name": "frame-07.png", "offset": 1560},
+    {"name": "frame-08.png", "offset": 1774}
+  ]
+}

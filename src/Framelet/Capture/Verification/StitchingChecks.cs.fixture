@@ -95,6 +95,9 @@ internal static class StitchingChecks
         using var limited = new ScrollCaptureSession();
         Throws<ArgumentException>(() => limited.Append(overHeight), "session enforces output height before allocating retained copies");
         Equal(limited.FrameCount, 0, "failed initial append leaves an empty session");
+        CheckRowTextures();
+        CheckBrowserChrome(document);
+        CheckRepeatedCardsWithOccludedText();
         return checks;
     }
 
@@ -117,6 +120,90 @@ internal static class StitchingChecks
             graphics.DrawString($"Result {section + 1}: preserve lines, spaces and borders", bodyFont, bodyBrush, 42, top + 103);
         }
         return bitmap;
+    }
+
+    private static void CheckBrowserChrome(Bitmap document)
+    {
+        using var scrollFirst = Viewport(document, 0, 600, 60, 44);
+        using var scrollSecond = Viewport(document, 170, 600, 60, 44);
+        using (var graphics = Graphics.FromImage(scrollFirst))
+        {
+            graphics.FillRectangle(Brushes.Gainsboro, 720, 60, 16, 496);
+            graphics.FillRectangle(Brushes.DimGray, 722, 80, 12, 90);
+        }
+        using (var graphics = Graphics.FromImage(scrollSecond))
+        {
+            graphics.FillRectangle(Brushes.Gainsboro, 720, 60, 16, 496);
+            graphics.FillRectangle(Brushes.DimGray, 722, 140, 12, 90);
+        }
+        var scrollbar = ImageStitcher.Analyze(scrollFirst, scrollSecond);
+        True(scrollbar.Status == ScrollMatchStatus.Matched && scrollbar.VerticalShift == 170,
+            "a moving inner scrollbar must not veto an otherwise exact document overlap");
+
+        using var hoverFirst = Viewport(document, 0, 600, 60, 44);
+        using var hoverSecond = Viewport(document, 170, 600, 60, 44);
+        using (var graphics = Graphics.FromImage(hoverFirst)) graphics.DrawRectangle(Pens.LightGray, 30, 300, 690, 150);
+        using (var graphics = Graphics.FromImage(hoverSecond)) graphics.DrawRectangle(Pens.Teal, 30, 130, 690, 150);
+        var hover = ImageStitcher.Analyze(hoverFirst, hoverSecond);
+        True(hover.Status == ScrollMatchStatus.Matched && hover.VerticalShift == 170,
+            "thin hover borders must not outweigh the unchanged text in a scrolling card");
+    }
+
+    private static void CheckRowTextures()
+    {
+        using var document = new Bitmap(160, 540, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(document))
+            for (int row = 0; row < document.Height; row++)
+            {
+                using var pen = new Pen(Color.FromArgb(row * 37 % 251, row * 61 % 253, row * 17 % 241));
+                graphics.DrawLine(pen, 0, row, document.Width, row);
+            }
+        using var first = Crop(document, 0, 240);
+        using var second = Crop(document, 150, 240);
+        using var third = Crop(document, 300, 240);
+        Equal(ImageStitcher.FindVerticalOverlap(first, second), 90, "full-width row colors retain vertical-only matching evidence");
+        using var joined = ImageStitcher.Stitch([first, second, third]);
+        PixelsEqual(joined, document, "horizontal color bands stitch without dropping any source row");
+    }
+
+    private static void CheckRepeatedCardsWithOccludedText()
+    {
+        CheckRepeatedCards(220, 600, 37, 60, true);
+        CheckRepeatedCards(180, 480, 37, 140, true);
+        CheckRepeatedCards(260, 480, 0, 320, false);
+        CheckRepeatedCards(310, 480, 0, 370, false);
+        CheckRepeatedCards(180, 480, 0, 360, true);
+    }
+
+    private static void CheckRepeatedCards(int period, int viewportHeight, int firstOffset, int distance, bool hover)
+    {
+        using var document = new Bitmap(760, Math.Max(3500, period * 16 + 220), PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(document))
+        using (var titleFont = new Font("Segoe UI", 16, FontStyle.Bold))
+        using (var bodyFont = new Font("Segoe UI", 11))
+        {
+            graphics.Clear(Color.White);
+            for (int index = 0; index < 16; index++)
+            {
+                int top = index * period;
+                graphics.DrawString($"Record {index + 1}", titleFont, Brushes.Black, 30, top + 18);
+                graphics.DrawString("Repeated paragraph, same width and repeated structure.", bodyFont, Brushes.Black, 30, top + 70);
+                graphics.DrawString("Same status and same content in every card.", bodyFont, Brushes.Black, 30, top + 100);
+                graphics.FillRectangle(Brushes.AliceBlue, 30, top + 130, 680, 40);
+                graphics.DrawString("Static repeated metadata label and empty values", bodyFont, Brushes.Black, 40, top + 140);
+            }
+        }
+        using var first = Crop(document, firstOffset, viewportHeight);
+        using var second = Crop(document, firstOffset + distance, viewportHeight);
+        if (hover)
+        {
+            using var graphics = Graphics.FromImage(second);
+            graphics.FillRectangle(Brushes.CornflowerBlue, 25, viewportHeight / 3, 700, 2);
+            graphics.FillRectangle(Brushes.CornflowerBlue, 25, viewportHeight * 7 / 10, 700, 2);
+        }
+        var match = ImageStitcher.Analyze(first, second);
+        True(match.Status == ScrollMatchStatus.Unmatched || (match.Status == ScrollMatchStatus.Matched && match.VerticalShift == distance),
+            $"repeated-card overlap cannot bypass identifying text: period={period}, height={viewportHeight}, expected={distance}, actual={match}");
     }
 
     private static Bitmap Crop(Bitmap document, int top, int height)

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Framelet scrolling regression</title>
+<style>
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: #f4f6f8; color: #233347; font: 16px/1.65 "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 2; padding: 18px 32px; background: white; box-shadow: 0 2px 12px #1b284626; }
+header strong { color: #147d70; font-size: 22px; }
+main { width: min(900px, 90%); margin: 24px auto 80px; }
+article { margin: 24px 0; padding: 22px 28px; background: white; border: 1px solid #dbe1e9; border-radius: 12px; box-shadow: 0 5px 18px #1631510d; }
+article:hover { border-color: #147d70; }
+h2 { margin: 0 0 8px; color: #17695e; font-size: 21px; }
+p { margin: 12px 0; }
+code { background: #edf4f2; padding: 4px 8px; }
+.gradient { height: 64px; border-radius: 8px; background: linear-gradient(110deg, #acd2cc, #e5d7a4, #b6c9e4); }
+footer { padding: 20px 32px; color: #64748b; background: white; }
+</style>
+<header><strong>Framelet 滚动捕捉回归</strong>　文字、阴影、固定标题与滚动条</header>
+<main id="content"></main>
+<footer>END · 最后一行必须保留</footer>
+<script>
+const content = document.getElementById("content");
+for (let index = 1; index <= 8; index++) {
+  const article = document.createElement("article");
+  article.innerHTML = `<h2>${String(index).padStart(2, "0")} · 自动滚动测试段落</h2><p>滚动后继续采集，保留相邻画面的重叠内容。检查这一行文字、空白和边框是否完整。</p><p>Reference ${index * 731 + 123} — The browser renders text, rounded cards, and translucent shadows independently after scrolling.</p><div class="gradient"></div><p><code>checkpoint-${index}</code>　每个编号应出现一次。</p>`;
+  content.append(article);
+}
+</script>
+</html>

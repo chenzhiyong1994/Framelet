@@ -55,7 +55,8 @@ public static class ImageStitcher
         int fixedTop = 0, fixedBottom = 0;
         while (fixedTop < height && SameRow(upper, lower, width, fixedTop, columns)) fixedTop++;
         while (fixedBottom < height - fixedTop && SameRow(upper, lower, width, height - fixedBottom - 1, columns)) fixedBottom++;
-        int minimumOverlap = Math.Min(height, Math.Max(16, Math.Min(96, height / 5)));
+        int minimumOverlap = Math.Max(Math.Min(height, Math.Max(16, Math.Min(96, height / 5))),
+            (height - fixedTop - fixedBottom + 3) / 4);
         var candidates = CandidateShifts(upper, lower, width, height, columns, fixedTop, fixedBottom, minimumOverlap);
         var matches = new List<(int Shift, double Score)>();
         foreach (int shift in candidates)
@@ -140,6 +141,10 @@ public static class ImageStitcher
 
     private static double AlignmentScore(int[] upper, int[] lower, int width, int height, int[] columns,
         int fixedTop, int fixedBottom, int shift, int minimumOverlap)
+        => ScoreAlignment(upper, lower, width, height, columns, fixedTop, fixedBottom, shift, minimumOverlap, false);
+
+    private static double ScoreAlignment(int[] upper, int[] lower, int width, int height, int[] columns,
+        int fixedTop, int fixedBottom, int shift, int minimumOverlap, bool includeVerticalFeatures)
     {
         int start = fixedTop + Math.Max(0, -shift);
         int end = height - fixedBottom - Math.Max(0, shift);
@@ -158,9 +163,12 @@ public static class ImageStitcher
                 if (differs) changed++;
                 samples++;
                 bool feature = column > 0 && (Different(upperColor, upper[upperOffset - 1]) || Different(lowerColor, lower[lowerOffset - 1]));
-                if (row > start)
+                if (includeVerticalFeatures && row > start)
                     feature |= Different(upperColor, upper[upperOffset - width]) || Different(lowerColor, lower[lowerOffset - width]);
                 if (!feature) continue;
+                if (!includeVerticalFeatures && differs
+                    && (IsThinVerticalBorder(upper, width, height, row + shift, column)
+                        || IsThinVerticalBorder(lower, width, height, row, column))) continue;
                 featureCount++;
                 rowFeatures++;
                 if (differs) featureChanged++;
@@ -168,10 +176,73 @@ public static class ImageStitcher
             }
             if (rowFeatures > 0) featureRows++;
         }
+        if (!includeVerticalFeatures && (featureCount < 48 || featureRows < 8))
+            return ScoreAlignment(upper, lower, width, height, columns, fixedTop, fixedBottom, shift, minimumOverlap, true);
         if (featureCount < 48 || featureRows < 8 || (double)changed / samples > 0.025 || (double)featureChanged / featureCount > 0.04)
             return double.PositiveInfinity;
         double score = (double)featureDifference / (featureCount * 3);
-        return score <= 3.5 ? score : double.PositiveInfinity;
+        if (score > 3.5 || (!includeVerticalFeatures && !MatchesLocalText(upper, lower, width, height, columns, start, end, shift)))
+            return double.PositiveInfinity;
+        return score;
+    }
+
+    private static bool MatchesLocalText(int[] upper, int[] lower, int width, int height, int[] columns, int start, int end, int shift)
+    {
+        var activeTiles = new bool[(width + 15) / 16];
+        foreach (int column in columns)
+        {
+            activeTiles[column / 16] = true;
+            if (column >= 16) activeTiles[column / 16 - 1] = true;
+        }
+        for (int tileTop = start; tileTop < end; tileTop += 16)
+            for (int tile = 0; tile < activeTiles.Length; tile++)
+            {
+                if (!activeTiles[tile]) continue;
+                int features = 0, differences = 0, textRows = 0, changedRows = 0;
+                uint changedColumns = 0;
+                int bottom = Math.Min(end, tileTop + 32), right = Math.Min(width, tile * 16 + 32);
+                for (int row = tileTop; row < bottom; row++)
+                {
+                    int edgeGroups = 0, previousEdge = -10, rowDifferences = 0;
+                    for (int column = Math.Max(1, tile * 16); column < right; column++)
+                    {
+                        int upperOffset = (row + shift) * width + column, lowerOffset = row * width + column;
+                        int upperColor = upper[upperOffset], lowerColor = lower[lowerOffset];
+                        if (!Different(upperColor, upper[upperOffset - 1]) && !Different(lowerColor, lower[lowerOffset - 1])) continue;
+                        bool differs = Different(upperColor, lowerColor);
+                        if (differs && (IsThinVerticalBorder(upper, width, height, row + shift, column)
+                            || IsThinVerticalBorder(lower, width, height, row, column))) continue;
+                        if (column - previousEdge > 2) edgeGroups++;
+                        previousEdge = column;
+                        features++;
+                        if (differs)
+                        {
+                            differences++;
+                            rowDifferences++;
+                            changedColumns |= 1u << (column - tile * 16);
+                        }
+                    }
+                    if (edgeGroups >= 3) textRows++;
+                    if (rowDifferences > 0) changedRows++;
+                }
+                if (textRows >= 4 && changedRows >= 4 && System.Numerics.BitOperations.PopCount(changedColumns) >= 4
+                    && features >= 24 && differences >= 8 && differences * 5 > features) return false;
+            }
+        return true;
+    }
+
+    private static bool IsThinVerticalBorder(int[] pixels, int width, int height, int row, int column)
+    {
+        if (column < 2 || column >= width - 2 || row < 16 || row >= height - 16) return false;
+        int offset = row * width + column;
+        int color = pixels[offset], left = pixels[offset - 2], right = pixels[offset + 2];
+        if (!Different(color, left) || !Different(color, right) || Different(left, right)) return false;
+        for (int distance = -16; distance <= 16; distance++)
+        {
+            int sample = offset + width * distance;
+            if (Different(color, pixels[sample]) || Different(left, pixels[sample - 2]) || Different(right, pixels[sample + 2])) return false;
+        }
+        return true;
     }
 
     private static bool AreEquivalent(int[] upper, int[] lower, int width, int height)
