@@ -6,6 +6,7 @@
   <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <StartupObject>CaptureChecks</StartupObject>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -17,6 +18,7 @@
     <Compile Include="../*.cs" />
     <Compile Include="../../BrandTheme.cs" />
     <Compile Include="Checks.cs.fixture" />
+    <Compile Include="NativeDesktopChecks.cs.fixture" />
     <Compile Include="StitchingChecks.cs.fixture" />
     <Compile Include="ScrollingCaptureChecks.cs.fixture" />
     <Compile Include="ScrollTargetChecks.cs.fixture" />

@@ -37,4 +37,6 @@ dotnet run --project src/Framelet/Capture/Verification/CaptureChecks.csproj -- -
 
 可选 `dotnet run --project src/Framelet/Capture/Verification/CaptureChecks.csproj -- --native-scroll` 会打开自有验证窗、移动鼠标并发送真实滚轮，检查屏幕采集与自动流程；运行期间不要同时操作桌面。
 
+原生测试先校验点下窗口和实际滚动目标的 HWND 归属，拒绝操作其他应用。RichTextBox 检查记录异步完成后的真实位移，并用原生 `SB_BOTTOM` 独立确认到底。后台启动无法置前时，使用[开发文档](../../../docs/development.md#从源码构建与验证)中的桌面测试入口，实际点击启动；无需更改系统前台或安全设置。
+
 运行时混合 DPI、多显示器、全局热键冲突和第三方软件兼容性仍需对应环境验证。屏幕采集无法还原被遮挡或受保护的内容。重复捕捉保留矩形边界，不保留自由路径。拼接处理同尺寸、向下滚动的静态内容，保留一份固定顶底栏；至少需要识别到的滚动正文高度的四分之一重叠。对齐优先验证文字边缘，避免细悬停边框压过正文；局部文字检查防止重复模板中的编号差异被整体均值掩盖。复杂重复纹理、动态工具栏、动画或不连续画面仍可能暂停，不将未验证的整帧直接追加。

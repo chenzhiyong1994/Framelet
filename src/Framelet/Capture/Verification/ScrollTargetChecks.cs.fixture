@@ -15,9 +15,10 @@ internal static class ScrollTargetChecks
             fixture.Activate();
             Pump(150);
             Rectangle region = fixture.Region;
+            VerifyFixturePoint(fixture, region);
             Point beforePreparation = new(region.Left + 6, region.Top + 6);
             Cursor.Position = beforePreparation;
-            using (var target = ScrollTarget.FromRegion(region))
+            using (var target = FromFixture(fixture, region))
             {
                 Verify(target.Prepare(out string error), "prepare fixture: " + error);
                 Verify(Cursor.Position == target.Position, "prepare positions pointer in the selected region");
@@ -64,7 +65,7 @@ internal static class ScrollTargetChecks
             }
             Verify(Cursor.Position == beforePreparation, "dispose restores untouched pointer");
 
-            using (var target = ScrollTarget.FromRegion(region))
+            using (var target = FromFixture(fixture, region))
             {
                 Verify(target.Prepare(out string error), "prepare cursor cancellation: " + error);
                 Point movedPointer = new(region.Left - 3, region.Top + 6);
@@ -77,7 +78,7 @@ internal static class ScrollTargetChecks
                 Verify(Cursor.Position == movedPointer, "dispose preserves user pointer movement");
             }
 
-            using (var target = ScrollTarget.FromRegion(region))
+            using (var target = FromFixture(fixture, region))
             {
                 Verify(target.Prepare(out string error), "prepare explicit resume: " + error);
                 Cursor.Position = new Point(region.Left - 3, region.Top + 6);
@@ -89,7 +90,7 @@ internal static class ScrollTargetChecks
 
             region = fixture.Region;
             using (var other = new ScrollFixtureHost(430))
-            using (var target = ScrollTarget.FromRegion(region))
+            using (var target = FromFixture(fixture, region))
             {
                 Verify(target.Prepare(out string error), $"prepare focus cancellation: {error}; target={fixture.WindowHandle}, foreground={NativeCapture.GetForegroundWindow()}");
                 other.Activate();
@@ -105,7 +106,7 @@ internal static class ScrollTargetChecks
             Pump(80);
             region = fixture.Region;
             Point selectedPoint = new(region.Left + 17, region.Top + 19);
-            using (var target = ScrollTarget.FromRegion(Screen.FromRectangle(region).Bounds, selectedPoint))
+            using (var target = FromFixture(fixture, Screen.FromRectangle(region).Bounds, selectedPoint))
             {
                 Verify(target.Position == selectedPoint, "full screen selection keeps its clicked target point");
                 Verify(target.Prepare(out string error), "prepare clicked screen target: " + error);
@@ -137,7 +138,12 @@ internal static class ScrollTargetChecks
         Rectangle captureRegion = entireScreen ? Screen.FromRectangle(contentRegion).Bounds : contentRegion;
         Point? targetPoint = entireScreen ? new Point(contentRegion.Left + 17, contentRegion.Top + 19) : null;
         int initialOffset = fixture.ScrollOffset;
+        VerifyFixturePoint(fixture, captureRegion, targetPoint);
+        using var baseline = CaptureFixtureFrame(contentRegion, 8 + initialOffset);
         using var controller = new ScrollingCaptureWindow(captureRegion, false, targetPoint);
+        var targetField = typeof(ScrollingCaptureWindow).GetField("target",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        VerifyFixtureTarget(fixture, (ScrollTarget)targetField!.GetValue(controller)!);
         using var watchdog = new System.Windows.Forms.Timer { Interval = 100 };
         var elapsed = new Stopwatch();
         bool observedRunning = false;
@@ -158,6 +164,23 @@ internal static class ScrollTargetChecks
         controller.Shown += (_, _) => { elapsed.Start(); watchdog.Start(); };
         DialogResult outcome = controller.ShowDialog();
         watchdog.Stop();
+        if (outcome != DialogResult.OK)
+        {
+            string directory = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "scroll-native",
+                "failure-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff'Z'"));
+            Directory.CreateDirectory(directory);
+            using var current = CaptureEngine.CaptureScreen(contentRegion);
+            baseline.Save(Path.Combine(directory, "baseline.png"), ImageFormat.Png);
+            current.Save(Path.Combine(directory, "current.png"), ImageFormat.Png);
+            File.WriteAllText(Path.Combine(directory, "diagnostic.json"), System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Scenario = scenario, Failure = stoppedBecause, Region = captureRegion,
+                InitialOffset = initialOffset, CurrentOffset = fixture.ScrollOffset,
+                fixture.WheelCount, FixtureWindow = fixture.WindowHandle.ToInt64(),
+                ForegroundWindow = NativeCapture.GetForegroundWindow().ToInt64(),
+                Match = ImageStitcher.Analyze(baseline, current)
+            }));
+        }
         verify(outcome == DialogResult.OK, scenario + " finishes automatically; " + stoppedBecause);
         verify(controller.AcceptedFrames > 1, scenario + " accepts multiple real desktop frames");
         verify(fixture.ScrollOffset == fixture.MaximumScrollOffset, scenario + " reaches the native scroll bottom");
@@ -178,6 +201,30 @@ internal static class ScrollTargetChecks
         result.Save(Path.Combine(artifacts, entireScreen ? "controller-screen.png" : "controller-region.png"), ImageFormat.Png);
         controller.Dispose();
         VerifyReleasedHotkeys(verify, scenario);
+    }
+
+    private static ScrollTarget FromFixture(ScrollFixtureHost fixture, Rectangle region, Point? targetPoint = null)
+    {
+        VerifyFixturePoint(fixture, region, targetPoint);
+        var target = ScrollTarget.FromRegion(region, targetPoint);
+        try { VerifyFixtureTarget(fixture, target); return target; }
+        catch { target.Dispose(); throw; }
+    }
+
+    private static void VerifyFixturePoint(ScrollFixtureHost fixture, Rectangle region, Point? targetPoint = null)
+    {
+        Point point = targetPoint ?? new Point(region.Left + region.Width / 2, region.Top + region.Height / 2);
+        IntPtr actual = GetAncestor(WindowFromPoint(new NativeCapture.NativePoint { X = point.X, Y = point.Y }), 2);
+        if (actual != fixture.WindowHandle)
+            throw new InvalidOperationException($"Scroll fixture refuses input to another window: point={point}, actual=0x{actual.ToInt64():X}, fixture=0x{fixture.WindowHandle.ToInt64():X}.");
+    }
+
+    private static void VerifyFixtureTarget(ScrollFixtureHost fixture, ScrollTarget target)
+    {
+        var rootField = typeof(ScrollTarget).GetField("rootWindow",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        if ((IntPtr)rootField!.GetValue(target)! != fixture.WindowHandle)
+            throw new InvalidOperationException("Scroll fixture target changed before input preparation.");
     }
 
     private static void VerifyReleasedHotkeys(Action<bool, string> verify, string scenario)
@@ -378,4 +425,6 @@ internal static class ScrollTargetChecks
     private static extern bool RegisterHotKey(IntPtr window, int identifier, uint modifiers, uint key);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnregisterHotKey(IntPtr window, int identifier);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(NativeCapture.NativePoint point);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
 }

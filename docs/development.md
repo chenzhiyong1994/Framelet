@@ -43,6 +43,15 @@ dotnet run --project src/Framelet/Capture/Verification/CaptureChecks.csproj -c R
 
 SDK 已在 `PATH` 中时可以省略 `-DotnetPath`，也可以设置 `DOTNET_EXE`。发布目录必须为空，脚本会复制当前 README、文档、品牌素材及运行时许可；已有文件时用 `-PublishDirectory` 选择新目录，避免旧文件混入。默认自检包含原生 MP4 编码；录屏自检使用合成画面，不采集桌面或麦克风。应用自检报告写入 `artifacts/self-tests/results.json`；这些检查不等同于所有桌面交互都已验证，人工验证记录见 [验证说明](validation.md)。
 
+如果后台终端启动的原生滚动测试无法置前，可构建独立桌面入口，打开后点击 **Start native checks**。测试目标必须是自有验证窗；窗口被遮挡或目标 HWND 不符时会失败，不向其他应用滚动。
+
+```powershell
+dotnet publish src/Framelet/Capture/Verification/CaptureChecks.csproj -c Release -r win-x64 --self-contained true -p:StartupObject=NativeDesktopChecks -p:OutputType=WinExe -o output/native-desktop-checks
+./output/native-desktop-checks/CaptureChecks.exe
+```
+
+入口只运行原生滚动检查，不启动应用自检。结果写入可执行文件旁的 `native-desktop-result.json`，截图与原生位置记录位于同目录的 `artifacts/scroll-native` 和 `artifacts/scroll-native-text`。运行期间不要操作鼠标、键盘或切换窗口。RichTextBox 的滚动可能在滚轮消息返回后才完成，因此检查在下一次输入前及最终快照中读取实际位移；到底通过原生 `SB_BOTTOM` 独立验证精确位置，不用图像重复或滚动条范围的近似值代替。
+
 支持的命令行入口：
 
 | 参数 | 用途 |

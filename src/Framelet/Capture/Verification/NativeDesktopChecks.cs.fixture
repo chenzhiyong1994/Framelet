@@ -1,0 +1,81 @@
+using System.Text.Json;
+
+internal static class NativeDesktopChecks
+{
+    [STAThread]
+    private static int Main()
+    {
+        Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        using var window = new Form
+        {
+            Text = "Framelet native scrolling checks",
+            StartPosition = FormStartPosition.CenterScreen,
+            ClientSize = new Size(540, 220)
+        };
+        using var instructions = new Label
+        {
+            Text = "Start runs real mouse-wheel checks in temporary test windows.\nPlease leave the mouse and keyboard untouched until the result appears.",
+            Dock = DockStyle.Fill,
+            Padding = new Padding(20)
+        };
+        using var start = new Button { Text = "Start native checks", Dock = DockStyle.Bottom, Height = 50 };
+        window.Controls.Add(instructions);
+        window.Controls.Add(start);
+        int exitCode = 1;
+        start.Click += (_, _) =>
+        {
+            start.Enabled = false;
+            window.Hide();
+            try
+            {
+                exitCode = RunChecks();
+                instructions.Text = exitCode == 0
+                    ? "PASS: all native scrolling checks completed.\nResults: native-desktop-result.json"
+                    : "FAIL: native scrolling checks did not complete.\nDetails: native-desktop-result.json";
+            }
+            catch (Exception error)
+            {
+                exitCode = 1;
+                instructions.Text = "Unable to save the native check result:\n" + error.Message;
+            }
+            finally
+            {
+                start.Text = "Checks completed";
+                window.Show();
+            }
+        };
+        Application.Run(window);
+        return exitCode;
+    }
+
+    private static int RunChecks()
+    {
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        var originalOutput = Console.Out;
+        var originalError = Console.Error;
+        int exitCode;
+        try
+        {
+            Console.SetOut(output);
+            Console.SetError(errors);
+            exitCode = CaptureChecks.Run(["--native-scroll"]);
+        }
+        finally
+        {
+            Console.SetOut(originalOutput);
+            Console.SetError(originalError);
+        }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "native-desktop-result.json"),
+            JsonSerializer.Serialize(new
+            {
+                Success = exitCode == 0,
+                ExitCode = exitCode,
+                Output = output.ToString(),
+                Errors = errors.ToString(),
+                FinishedAt = DateTimeOffset.Now
+            }, new JsonSerializerOptions { WriteIndented = true }));
+        return exitCode;
+    }
+}

@@ -59,10 +59,13 @@ internal static class NativeTextScrollChecks
         }
         Verify(longest >= 3, "native text receives at least three consecutive downward wheel movements");
         Verify(final.FirstVisibleLine > initial.FirstVisibleLine, "native first visible line independently confirms scrolling");
-        Verify(final.AtBottom, "native scrollbar independently confirms the bottom was reached");
         Verify(controller.AcceptedFrames == moved + 1, "every native text movement produces one accepted frame");
         using var result = controller.TakeResult();
         Verify(result != null, "native text controller returns an image");
+        var bottom = fixture.ReadBottomReference();
+        Verify(bottom == final.Position && final.LastCharacterPosition.Y >= 0 &&
+            final.LastCharacterPosition.Y + final.LineHeight <= final.ClientSize.Height,
+            $"native SB_BOTTOM independently confirms the complete last line and exact bottom; captured={final.Position}, bottom={bottom}");
         if (result != null)
         {
             int distance = final.Position.Y - initial.Position.Y;
@@ -78,7 +81,8 @@ internal static class NativeTextScrollChecks
                 Distance = distance,
                 controller.AcceptedFrames,
                 Initial = initial,
-                Final = final
+                Final = final,
+                BottomReference = bottom
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
         return checks;
@@ -200,6 +204,22 @@ internal static class NativeTextScrollChecks
         internal Rectangle Region => OnUi(() => text!.RectangleToScreen(Rectangle.Inflate(text.ClientRectangle, -4, -4)));
         internal IntPtr WindowHandle => OnUi(() => window!.Handle);
         internal TextSnapshot Snapshot => OnUi(() => text!.ReadSnapshot());
+        internal Point ReadBottomReference()
+        {
+            OnUi(() => SendMessage(text!.Handle, 0x0115, new IntPtr(7), IntPtr.Zero));
+            Point previous = OnUi(() => text!.ReadPosition());
+            var elapsed = Stopwatch.StartNew();
+            int stable = 0;
+            while (elapsed.Elapsed < TimeSpan.FromSeconds(2))
+            {
+                Thread.Sleep(80);
+                Point current = OnUi(() => text!.ReadPosition());
+                stable = current == previous ? stable + 1 : 0;
+                if (stable >= 4) return current;
+                previous = current;
+            }
+            throw new TimeoutException("Native SB_BOTTOM position did not settle.");
+        }
         internal object WindowStateSnapshot => OnUi<object>(() =>
         {
             var form = window!;
@@ -264,16 +284,20 @@ internal static class NativeTextScrollChecks
 
         internal TextSnapshot ReadSnapshot()
         {
+            Point position = ReadPosition();
+            CompletePreviousStep(position.Y);
             var information = new ScrollInformation { Size = (uint)Marshal.SizeOf<ScrollInformation>(), Mask = 7 };
             bool read = GetScrollInfo(Handle, 1, ref information);
             if (!read) throw new InvalidOperationException("Cannot read the native rich-text scrollbar.");
             bool hasCaret = GetCaretPos(out var caret);
-            return new TextSnapshot(ReadPosition(), SendMessage(Handle, 0x00CE, IntPtr.Zero, IntPtr.Zero).ToInt32(),
+            return new TextSnapshot(position, SendMessage(Handle, 0x00CE, IntPtr.Zero, IntPtr.Zero).ToInt32(),
                 information.Position >= information.Maximum - (int)information.Page + 1, steps.ToArray(),
-                Focused, hasCaret ? new Point(caret.X, caret.Y) : null);
+                Focused, hasCaret ? new Point(caret.X, caret.Y) : null,
+                information.Minimum, information.Maximum, information.Page, information.Position,
+                GetPositionFromCharIndex(TextLength - 1), Font.Height, ClientSize);
         }
 
-        private Point ReadPosition()
+        internal Point ReadPosition()
         {
             var position = new NativePoint();
             if (SendMessage(Handle, 0x04DD, IntPtr.Zero, ref position) == IntPtr.Zero)
@@ -285,8 +309,17 @@ internal static class NativeTextScrollChecks
         {
             bool wheel = message.Msg == 0x020A;
             int before = wheel ? ReadPosition().Y : 0;
+            if (wheel)
+            {
+                CompletePreviousStep(before);
+                steps.Add(new ScrollStep(before, before));
+            }
             base.WndProc(ref message);
-            if (wheel) steps.Add(new ScrollStep(before, ReadPosition().Y));
+        }
+
+        private void CompletePreviousStep(int position)
+        {
+            if (steps.Count > 0) steps[^1] = steps[^1] with { After = position };
         }
     }
 
@@ -348,7 +381,9 @@ internal static class NativeTextScrollChecks
     }
 
     private readonly record struct ScrollStep(int Before, int After);
-    private readonly record struct TextSnapshot(Point Position, int FirstVisibleLine, bool AtBottom, ScrollStep[] Steps, bool Focused, Point? CaretPosition);
+    private readonly record struct TextSnapshot(Point Position, int FirstVisibleLine, bool ScrollbarAtMaximum, ScrollStep[] Steps,
+        bool Focused, Point? CaretPosition, int ScrollMinimum, int ScrollMaximum, uint ScrollPage, int ScrollPosition,
+        Point LastCharacterPosition, int LineHeight, Size ClientSize);
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct NativeRectangle { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct StartupInformation

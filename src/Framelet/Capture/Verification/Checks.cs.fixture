@@ -6,6 +6,9 @@ internal static class CaptureChecks
     private static int checks;
     [STAThread]
     private static int Main(string[] args)
+        => Run(args);
+
+    internal static int Run(string[] args)
     {
         try
         {
