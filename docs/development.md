@@ -30,6 +30,9 @@ python -m http.server 8768 --bind 127.0.0.1 --directory docs
 
 # 额外执行可选 FFmpeg 编码、暂停恢复、合并与裁剪检查
 ./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe' -WithRecording
+
+# 可选真实滚轮与桌面采集检查，会打开自有验证窗并短暂控制鼠标
+dotnet run --project src/Framelet/Capture/Verification/CaptureChecks.csproj -c Release -- --native-scroll
 ```
 
 SDK 已在 `PATH` 中时可以省略 `-DotnetPath`，也可以设置 `DOTNET_EXE`。发布目录必须为空，脚本会复制当前 README、文档、品牌素材及运行时许可；已有文件时用 `-PublishDirectory` 选择新目录，避免旧文件混入。默认自检包含原生 MP4 编码；录屏自检使用合成画面，不采集桌面或麦克风。应用自检报告写入 `artifacts/self-tests/results.json`；这些检查不等同于所有桌面交互都已验证，人工验证记录见 [验证说明](validation.md)。

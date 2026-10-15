@@ -17,6 +17,9 @@
     <Compile Include="../*.cs" />
     <Compile Include="../../BrandTheme.cs" />
     <Compile Include="Checks.cs.fixture" />
+    <Compile Include="StitchingChecks.cs.fixture" />
+    <Compile Include="ScrollingCaptureChecks.cs.fixture" />
+    <Compile Include="ScrollTargetChecks.cs.fixture" />
   </ItemGroup>
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 </Project>

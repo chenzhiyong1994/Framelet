@@ -324,7 +324,7 @@ public sealed class CapturePanel : Form
         bool editorVisible = editor?.Visible == true;
         try
         {
-            if (settings.HideOnCapture) Hide();
+            if (settings.HideOnCapture || mode == CaptureMode.Scrolling) Hide();
             if (editorVisible) editor!.Hide();
             await Task.Delay(Math.Max(200, settings.DelaySeconds * 1000));
             using Bitmap? bitmap = interval

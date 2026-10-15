@@ -1,0 +1,196 @@
+using Framelet;
+using System.Drawing.Imaging;
+
+internal static class StitchingChecks
+{
+    private static int checks;
+
+    public static int Run()
+    {
+        using var document = MakeDocument(760, 1900);
+        using var first = Crop(document, 0, 540);
+        using var second = Crop(document, 180, 540);
+        using var third = Crop(document, 360, 540);
+        Equal(ImageStitcher.FindVerticalOverlap(first, second), 360, "text and whitespace overlap");
+        using var joined = ImageStitcher.Stitch([first, second, third]);
+        using var expected = Crop(document, 0, 900);
+        PixelsEqual(joined, expected, "text and whitespace retain every row");
+
+        using var fixedFirst = Viewport(document, 0, 600, 60, 44);
+        using var fixedSecond = Viewport(document, 170, 600, 60, 44);
+        using var fixedThird = Viewport(document, 340, 600, 60, 44);
+        Equal(ImageStitcher.FindVerticalOverlap(fixedFirst, fixedSecond), 430, "fixed bars do not hide scroll distance");
+        using var fixedJoined = ImageStitcher.Stitch([fixedFirst, fixedSecond, fixedSecond, fixedThird]);
+        using var fixedExpected = Viewport(document, 0, 940, 60, 44);
+        PixelsEqual(fixedJoined, fixedExpected, "fixed header and footer occur only once");
+
+        var upward = ImageStitcher.Analyze(second, first);
+        True(upward.Status == ScrollMatchStatus.Upward && upward.VerticalShift == -180, "upward scroll is distinguished from failure");
+        using var smallStep = Crop(document, 1, 540);
+        var precise = ImageStitcher.Analyze(first, smallStep);
+        True(precise.Status == ScrollMatchStatus.Matched && precise.VerticalShift == 1, "single-pixel downward motion does not lose a row");
+        using var distant = Crop(document, 1100, 540);
+        True(ImageStitcher.Analyze(first, distant).Status == ScrollMatchStatus.Unmatched, "unproven nonoverlapping content is rejected");
+        Throws<InvalidOperationException>(() => ImageStitcher.Stitch([first, distant]), "batch stitching cannot silently concatenate unmatched frames");
+
+        using var blinking = (Bitmap)first.Clone();
+        using (var graphics = Graphics.FromImage(blinking)) graphics.FillRectangle(Brushes.Black, 600, 350, 1, 16);
+        True(ImageStitcher.AreEquivalent(first, blinking), "small caret blink does not prevent settling");
+        True(ImageStitcher.Analyze(first, blinking).Status == ScrollMatchStatus.Duplicate, "small caret blink does not extend output");
+
+        using var periodic = PeriodicDocument(760, 1200);
+        using var periodicFirst = Crop(periodic, 0, 480);
+        using var periodicSecond = Crop(periodic, 24, 480);
+        True(ImageStitcher.Analyze(periodicFirst, periodicSecond).Status == ScrollMatchStatus.Unmatched, "ambiguous repeating rows are refused");
+
+        using var screenFirst = ScreenWithDocument(document, 0, new Size(1600, 1000), new Rectangle(600, 180, 760, 540));
+        using var screenSecond = ScreenWithDocument(document, 180, new Size(1600, 1000), new Rectangle(600, 180, 760, 540));
+        var partial = ImageStitcher.Analyze(screenFirst, screenSecond);
+        True(partial.Status == ScrollMatchStatus.Matched && partial.VerticalShift == 180, "stationary desktop and sidebar do not dilute content motion");
+        using var screenJoined = ImageStitcher.Stitch([screenFirst, screenSecond]);
+        using var screenContent = screenJoined.Clone(new Rectangle(600, 180, 760, 720), PixelFormat.Format32bppArgb);
+        using var screenExpected = Crop(document, 0, 720);
+        PixelsEqual(screenContent, screenExpected, "partial-screen scrolling retains every document row");
+
+        using var wideFirst = ScreenWithDocument(document, 0, new Size(3840, 2160), new Rectangle(1200, 800, 500, 360));
+        using var wideSecond = ScreenWithDocument(document, 100, new Size(3840, 2160), new Rectangle(1200, 800, 500, 360));
+        True(!ImageStitcher.AreEquivalent(wideFirst, wideSecond), "small scrolling pane on a 4K screen is not mistaken for the bottom");
+        var wide = ImageStitcher.Analyze(wideFirst, wideSecond);
+        True(wide.Status == ScrollMatchStatus.Matched && wide.VerticalShift == 100, "small scrolling pane on a 4K screen has a reliable displacement");
+
+        using var session = new ScrollCaptureSession();
+        True(session.Append(fixedFirst).Status == ScrollMatchStatus.Matched, "incremental session accepts first frame");
+        True(session.Append(fixedSecond).Status == ScrollMatchStatus.Matched, "incremental session accepts reliable next frame");
+        Equal(session.Height, 770, "incremental height counts only scroll displacement");
+        True(session.Append(fixedSecond).Status == ScrollMatchStatus.Duplicate, "incremental duplicate is ignored");
+        True(session.Append(fixedFirst).Status == ScrollMatchStatus.Upward, "incremental upward frame is rejected without changing state");
+        Equal(session.FrameCount, 2, "rejected and duplicate frames are not retained");
+        True(session.Append(fixedThird).Status == ScrollMatchStatus.Matched, "incremental session resumes after rejected frame");
+        using var incremental = session.ToBitmap();
+        PixelsEqual(incremental, fixedExpected, "incremental fixed-bar output equals the document");
+        using var ownedSession = new ScrollCaptureSession();
+        using (var disposableInput = (Bitmap)first.Clone()) ownedSession.Append(disposableInput);
+        using var ownedResult = ownedSession.ToBitmap();
+        PixelsEqual(ownedResult, first, "incremental session owns its retained pixels");
+        using var emptySession = new ScrollCaptureSession();
+        Throws<InvalidOperationException>(() => emptySession.ToBitmap(), "empty incremental output is rejected");
+        emptySession.Dispose();
+        Throws<ObjectDisposedException>(() => emptySession.Append(first), "disposed incremental session cannot accept a frame");
+
+        using var longSession = new ScrollCaptureSession();
+        for (int offset = 0; offset <= 700; offset += 20)
+        {
+            using var frame = Viewport(document, offset, 600, 60, 44);
+            True(longSession.Append(frame).Status == ScrollMatchStatus.Matched, "many short scrolls remain aligned while blank footer margins vary");
+        }
+        using var longOutput = longSession.ToBitmap();
+        using var longExpected = Viewport(document, 0, 1300, 60, 44);
+        PixelsEqual(longOutput, longExpected, "trimming across multiple short retained strips preserves every pixel");
+        using var invalidFrame = new Bitmap(760, 600);
+        using (var graphics = Graphics.FromImage(invalidFrame)) graphics.Clear(Color.Black);
+        True(longSession.Append(invalidFrame).Status == ScrollMatchStatus.Unmatched, "unmatched frame is rejected without losing accepted strips");
+        using var afterRejected = longSession.ToBitmap();
+        PixelsEqual(afterRejected, longExpected, "failed append leaves the complete result available");
+        using var overHeight = new Bitmap(2, 64001);
+        using var limited = new ScrollCaptureSession();
+        Throws<ArgumentException>(() => limited.Append(overHeight), "session enforces output height before allocating retained copies");
+        Equal(limited.FrameCount, 0, "failed initial append leaves an empty session");
+        return checks;
+    }
+
+    private static Bitmap MakeDocument(int width, int height)
+    {
+        var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.Clear(Color.White);
+        using var titleFont = new Font("Segoe UI", 16, FontStyle.Bold);
+        using var bodyFont = new Font("Segoe UI", 11);
+        using var bodyBrush = new SolidBrush(Color.FromArgb(35, 40, 46));
+        using var accentBrush = new SolidBrush(Color.FromArgb(24, 102, 185));
+        using var panelBrush = new SolidBrush(Color.FromArgb(240, 245, 250));
+        for (int section = 0, top = 18; top < height; section++, top += 173 + section % 3 * 19)
+        {
+            graphics.DrawString($"Capture report {section + 1:D2}", titleFont, accentBrush, 30, top);
+            graphics.DrawString($"A short paragraph has a unique value: {section * 739 + 127}.", bodyFont, bodyBrush, 30, top + 38);
+            graphics.DrawString("Most of a real page is empty space around text.", bodyFont, bodyBrush, 30, top + 63);
+            graphics.FillRectangle(panelBrush, 30, top + 98, width - 70, 32);
+            graphics.DrawString($"Result {section + 1}: preserve lines, spaces and borders", bodyFont, bodyBrush, 42, top + 103);
+        }
+        return bitmap;
+    }
+
+    private static Bitmap Crop(Bitmap document, int top, int height)
+        => document.Clone(new Rectangle(0, top, document.Width, height), PixelFormat.Format32bppArgb);
+
+    private static Bitmap PeriodicDocument(int width, int height)
+    {
+        var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        using var font = new Font("Segoe UI", 12);
+        graphics.Clear(Color.White);
+        for (int top = 0; top < height; top += 48)
+        {
+            graphics.FillRectangle(Brushes.AliceBlue, 20, top, width - 40, 24);
+            graphics.DrawString("Repeated table entry", font, Brushes.Black, 30, top + 4);
+        }
+        return bitmap;
+    }
+
+    private static Bitmap ScreenWithDocument(Bitmap document, int offset, Size size, Rectangle pane)
+    {
+        var bitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.Clear(Color.FromArgb(40, 55, 75));
+        using var font = new Font("Segoe UI", 16);
+        graphics.FillRectangle(Brushes.LightGray, 40, 100, 300, size.Height - 180);
+        graphics.DrawString("Stationary sidebar", font, Brushes.Black, 60, 160);
+        graphics.DrawString("Navigation and settings", font, Brushes.Black, 60, 300);
+        graphics.DrawImage(document, pane, new Rectangle(0, offset, pane.Width, pane.Height), GraphicsUnit.Pixel);
+        return bitmap;
+    }
+
+    private static Bitmap Viewport(Bitmap document, int offset, int height, int header, int footer)
+    {
+        var bitmap = new Bitmap(document.Width, height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.DrawImage(document, new Rectangle(0, header, bitmap.Width, height - header - footer),
+            new Rectangle(0, offset, bitmap.Width, height - header - footer), GraphicsUnit.Pixel);
+        using var headerBrush = new SolidBrush(Color.FromArgb(29, 44, 64));
+        using var footerBrush = new SolidBrush(Color.FromArgb(218, 228, 238));
+        using var font = new Font("Segoe UI", 11);
+        graphics.FillRectangle(headerBrush, 0, 0, bitmap.Width, header);
+        graphics.DrawString("DOCUMENTS    Search your notes", font, Brushes.White, 22, 18);
+        graphics.FillRectangle(footerBrush, 0, height - footer, bitmap.Width, footer);
+        graphics.DrawString("Ready | Saved locally", font, Brushes.Black, 22, height - footer + 12);
+        return bitmap;
+    }
+
+    private static void Equal(int actual, int expected, string label)
+    {
+        if (actual != expected) throw new InvalidOperationException($"{label}: expected {expected}, actual {actual}");
+        checks++;
+    }
+
+    private static void True(bool value, string label)
+    {
+        if (!value) throw new InvalidOperationException(label);
+        checks++;
+    }
+
+    private static void Throws<T>(Action action, string label) where T : Exception
+    {
+        try { action(); }
+        catch (T) { checks++; return; }
+        throw new InvalidOperationException(label);
+    }
+
+    private static void PixelsEqual(Bitmap actual, Bitmap expected, string label)
+    {
+        if (actual.Size != expected.Size) throw new InvalidOperationException($"{label}: dimensions differ ({actual.Size} / {expected.Size})");
+        for (int row = 0; row < actual.Height; row++)
+            for (int column = 0; column < actual.Width; column++)
+                if (actual.GetPixel(column, row).ToArgb() != expected.GetPixel(column, row).ToArgb())
+                    throw new InvalidOperationException($"{label}: pixel differs at {column},{row}");
+        checks++;
+    }
+}

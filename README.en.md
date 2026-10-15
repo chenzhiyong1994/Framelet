@@ -57,7 +57,7 @@ Screenshot shortcuts can be changed in Settings. If a recording shortcut is in u
 
 ## Small scope, clear boundaries
 
-Export images as PNG, JPEG, BMP, GIF, TIFF, or a single-page PDF. Annotations become pixels and can be undone within the editing session. GIF/TIFF editing uses the first frame or page. Scrolling capture uses manual scrolling.
+Export images as PNG, JPEG, BMP, GIF, TIFF, or a single-page PDF. Annotations become pixels and can be undone within the editing session. GIF/TIFF editing uses the first frame or page. Scrolling capture automatically scrolls, captures, and stitches a selected region or screen.
 
 Screen recording requires Windows media components. Audio capture needs optional FFmpeg and has not been verified with a real audio source. Dedicated system-audio loopback, webcam overlays, and multitrack editing are not included. Monitor selection has synthetic coordinate checks; physical mixed-DPI multi-monitor setups still need validation.
 

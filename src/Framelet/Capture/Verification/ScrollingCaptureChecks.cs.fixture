@@ -1,0 +1,257 @@
+using Framelet;
+using System.Diagnostics;
+using System.Drawing.Imaging;
+
+internal static class ScrollingCaptureChecks
+{
+    private static int checks;
+
+    internal static int Run()
+    {
+        checks = 0;
+        CheckAutomaticCompletion();
+        CheckUnresponsiveTarget();
+        CheckUnmatchedFrame();
+        CheckPauseAndResume();
+        CheckFinishIncludesPendingFrame();
+        CheckCancellation();
+        return checks;
+    }
+
+    private static void CheckAutomaticCompletion()
+    {
+        using var document = MakeDocument(96, 420, 517);
+        const int viewportHeight = 180;
+        int offset = 0;
+        int scrollCalls = 0;
+        bool preparedWhileModal = false;
+        bool allCapturesVisible = true;
+        ScrollingCaptureWindow? window = null;
+        using (window = new ScrollingCaptureWindow(new Rectangle(20, 20, document.Width, viewportHeight),
+            () =>
+            {
+                allCapturesVisible &= window!.Visible && window.Modal;
+                return Frame(document, offset, viewportHeight);
+            },
+            () => { preparedWhileModal = window!.Visible && window.Modal; return null; },
+            () => { scrollCalls++; offset = Math.Min(document.Height - viewportHeight, offset + 60); return null; },
+            sampleDelay: 1, nativeControls: false))
+        {
+            Verify(Show(window) == DialogResult.OK, "automatic capture completes after reaching the document bottom");
+            Verify(preparedWhileModal && allCapturesVisible,
+                "opacity changes preserve the visible modal lifetime through every captured frame");
+            Verify(window.AcceptedFrames == 5, "duplicate bottom frames are not accepted as new content");
+            Verify(scrollCalls == 7, "automatic capture confirms the unchanged bottom before completing");
+            using var result = TakeResult(window);
+            PixelsEqual(result, document, "automatic capture preserves every document pixel without repeated rows");
+        }
+    }
+
+    private static void CheckUnresponsiveTarget()
+    {
+        using var document = MakeDocument(96, 180, 518);
+        int scrollCalls = 0;
+        bool observedStoppedState = false;
+        using var window = new ScrollingCaptureWindow(new Rectangle(20, 20, 96, 180),
+            () => new Bitmap(document), () => null, () => { scrollCalls++; return null; },
+            sampleDelay: 1, nativeControls: false);
+        var outcome = Show(window, () =>
+        {
+            if (window.IsRunning || scrollCalls < 3 || observedStoppedState) return;
+            observedStoppedState = true;
+            Verify(window.Visible && window.DialogResult == DialogResult.None,
+                "an unresponsive first screen remains open instead of reporting automatic success");
+            Verify(window.StatusText.Contains("没有响应滚动"), "unresponsive target has an actionable explanation");
+            Verify(window.AcceptedFrames == 1 && scrollCalls == 3, "unresponsive target retains one frame and stops input");
+            window.RequestFinish();
+        });
+        Verify(observedStoppedState && outcome == DialogResult.OK, "user can explicitly finish an unresponsive single screen");
+        using var result = TakeResult(window);
+        PixelsEqual(result, document, "explicit single screen result preserves the original pixels");
+    }
+
+    private static void CheckUnmatchedFrame()
+    {
+        using var document = MakeDocument(96, 360, 519);
+        using var unrelated = MakeDocument(96, 180, 1520);
+        int offset = 0;
+        int scrollCalls = 0;
+        bool observedStoppedState = false;
+        using var window = new ScrollingCaptureWindow(new Rectangle(20, 20, 96, 180),
+            () => scrollCalls >= 2 ? new Bitmap(unrelated) : Frame(document, offset, 180),
+            () => null,
+            () => { scrollCalls++; offset += 60; return null; },
+            sampleDelay: 1, nativeControls: false);
+        var outcome = Show(window, () =>
+        {
+            if (window.IsRunning || scrollCalls < 2 || observedStoppedState) return;
+            observedStoppedState = true;
+            Verify(window.DialogResult == DialogResult.None, "an unmatched frame pauses the capture session");
+            Verify(window.StatusText.Contains("无法可靠对齐"), "unmatched frame exposes a recovery explanation");
+            Verify(window.AcceptedFrames == 2 && scrollCalls == 2, "unmatched pixels never enter the accepted frame set");
+            window.RequestFinish();
+        });
+        Verify(observedStoppedState && outcome == DialogResult.OK, "accepted content remains finishable after alignment failure");
+        using var result = TakeResult(window);
+        using var expected = Frame(document, 0, 240);
+        PixelsEqual(result, expected, "alignment failure preserves exactly the previously accepted content");
+    }
+
+    private static void CheckPauseAndResume()
+    {
+        using var document = MakeDocument(96, 360, 521);
+        int offset = 0;
+        int scrollCalls = 0;
+        int prepareCalls = 0;
+        int pausedObservations = 0;
+        bool resumed = false;
+        ScrollingCaptureWindow? window = null;
+        using (window = new ScrollingCaptureWindow(new Rectangle(20, 20, 96, 180),
+            () => Frame(document, offset, 180),
+            () => { prepareCalls++; return null; },
+            () =>
+            {
+                scrollCalls++;
+                offset += 60;
+                if (scrollCalls == 1) window!.TogglePause();
+                else window!.RequestFinish();
+                return null;
+            }, sampleDelay: 1, nativeControls: false))
+        {
+            var outcome = Show(window, () =>
+            {
+                if (window.IsRunning || scrollCalls == 0 || resumed) return;
+                Verify(window.Visible && window.DialogResult == DialogResult.None, "pause keeps the modal session open");
+                Verify(window.AcceptedFrames == 2 && scrollCalls == 1, "pause saves the in-flight frame and sends no further input");
+                pausedObservations++;
+                if (pausedObservations < 3) return;
+                resumed = true;
+                window.TogglePause();
+            });
+            Verify(resumed && pausedObservations == 3 && outcome == DialogResult.OK, "paused session can resume and finish");
+            Verify(prepareCalls == 2 && scrollCalls == 2, "resume prepares the same target again before sending input");
+            Verify(window.AcceptedFrames == 3, "resume does not append its repeated initial frame");
+            using var result = TakeResult(window);
+            using var expected = Frame(document, 0, 300);
+            PixelsEqual(result, expected, "pause and resume preserve seamless document pixels");
+        }
+    }
+
+    private static void CheckFinishIncludesPendingFrame()
+    {
+        using var document = MakeDocument(96, 300, 522);
+        int offset = 0;
+        int scrollCalls = 0;
+        ScrollingCaptureWindow? window = null;
+        using (window = new ScrollingCaptureWindow(new Rectangle(20, 20, 96, 180),
+            () => Frame(document, offset, 180), () => null,
+            () =>
+            {
+                scrollCalls++;
+                offset += 60;
+                window!.RequestFinish();
+                return null;
+            }, sampleDelay: 10, nativeControls: false))
+        {
+            Verify(Show(window) == DialogResult.OK, "finish requested during scrolling completes successfully");
+            Verify(scrollCalls == 1 && window.AcceptedFrames == 2, "finish captures the last dispatched scroll and sends no extra input");
+            using var result = TakeResult(window);
+            using var expected = Frame(document, 0, 240);
+            PixelsEqual(result, expected, "finish includes the pending final frame in the returned image");
+        }
+    }
+
+    private static void CheckCancellation()
+    {
+        using var document = MakeDocument(96, 300, 523);
+        int captureCalls = 0;
+        int scrollCalls = 0;
+        ScrollingCaptureWindow? window = null;
+        using (window = new ScrollingCaptureWindow(new Rectangle(20, 20, 96, 180),
+            () => { captureCalls++; return Frame(document, 0, 180); }, () => null,
+            () =>
+            {
+                scrollCalls++;
+                window!.DialogResult = DialogResult.Cancel;
+                window.Close();
+                return null;
+            }, sampleDelay: 10, nativeControls: false))
+        {
+            Verify(Show(window) == DialogResult.Cancel, "cancellation closes the modal session with a canceled outcome");
+            int capturesAtCancellation = captureCalls;
+            Pump(80);
+            Verify(scrollCalls == 1 && captureCalls == capturesAtCancellation,
+                "cancellation prevents all subsequent screen acquisition and scroll input");
+            Verify(!window.IsRunning && window.TakeResult() == null, "cancellation returns no image and stops the asynchronous capture loop");
+        }
+    }
+
+    private static DialogResult Show(ScrollingCaptureWindow window, Action? observe = null)
+    {
+        using var observer = new System.Windows.Forms.Timer { Interval = 10 };
+        var elapsed = Stopwatch.StartNew();
+        Exception? failure = null;
+        observer.Tick += (_, _) =>
+        {
+            try
+            {
+                if (elapsed.Elapsed > TimeSpan.FromSeconds(8))
+                    throw new TimeoutException("Scrolling controller verification did not complete: " + window.StatusText);
+                observe?.Invoke();
+            }
+            catch (Exception error)
+            {
+                failure = error;
+                window.DialogResult = DialogResult.Cancel;
+                window.Close();
+            }
+        };
+        window.Shown += (_, _) => observer.Start();
+        var outcome = window.ShowDialog();
+        observer.Stop();
+        if (failure != null) throw new InvalidOperationException("Scrolling controller observation failed.", failure);
+        return outcome;
+    }
+
+    private static Bitmap TakeResult(ScrollingCaptureWindow window)
+        => window.TakeResult() ?? throw new InvalidOperationException("Scrolling controller returned no image.");
+
+    private static Bitmap Frame(Bitmap document, int offset, int height)
+        => document.Clone(new Rectangle(0, offset, document.Width, height), PixelFormat.Format32bppArgb);
+
+    private static Bitmap MakeDocument(int width, int height, int seed)
+    {
+        var document = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        var random = new Random(seed);
+        for (int row = 0; row < height; row++)
+            for (int column = 0; column < width; column++)
+                document.SetPixel(column, row, Color.FromArgb(random.Next(256), random.Next(256), random.Next(256)));
+        return document;
+    }
+
+    private static void Pump(int milliseconds)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (elapsed.ElapsedMilliseconds < milliseconds)
+        {
+            Application.DoEvents();
+            Thread.Sleep(1);
+        }
+    }
+
+    private static void PixelsEqual(Bitmap actual, Bitmap expected, string label)
+    {
+        Verify(actual.Size == expected.Size, label + ": dimensions");
+        for (int row = 0; row < actual.Height; row++)
+            for (int column = 0; column < actual.Width; column++)
+                if (actual.GetPixel(column, row) != expected.GetPixel(column, row))
+                    throw new InvalidOperationException($"{label}: pixel differs at {column},{row}");
+        checks++;
+    }
+
+    private static void Verify(bool condition, string label)
+    {
+        if (!condition) throw new InvalidOperationException("Scrolling controller check failed: " + label);
+        checks++;
+    }
+}

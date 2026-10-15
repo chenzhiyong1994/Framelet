@@ -53,23 +53,42 @@ public static class CaptureEngine
 
     public static Bitmap? SelectCapture(CaptureMode mode, Size fixedSize, bool includeCursor = false)
     {
+        if (mode == CaptureMode.Scrolling) return CaptureScrolling(fixedSize);
         if (mode == CaptureMode.RepeatLast && !LastRegion.IsEmpty)
         {
             var bounds = Rectangle.Intersect(LastRegion, SystemInformation.VirtualScreen);
             return bounds.IsEmpty ? null : CaptureScreen(bounds, includeCursor);
         }
 
-        var selectionMode = mode is CaptureMode.Scrolling or CaptureMode.RepeatLast ? CaptureMode.Rectangle : mode;
+        var selectionMode = mode == CaptureMode.RepeatLast ? CaptureMode.Rectangle : mode;
         using var overlay = new CaptureSelection(selectionMode, fixedSize, includeCursor);
         if (overlay.ShowDialog() != DialogResult.OK) return null;
         LastRegion = overlay.SelectedBounds;
-        if (mode == CaptureMode.Scrolling)
-        {
-            using var scroller = new ScrollingCaptureWindow(LastRegion, includeCursor);
-            return scroller.ShowDialog() == DialogResult.OK ? scroller.TakeResult() : null;
-        }
         return overlay.CreateSelectionBitmap();
     }
+
+    private static Bitmap? CaptureScrolling(Size fixedSize)
+    {
+        CaptureMode selectionMode;
+        using (var options = new ScrollingCaptureOptions())
+        {
+            if (options.ShowDialog() != DialogResult.OK) return null;
+            selectionMode = options.SelectionMode;
+        }
+        DwmFlush();
+        Point? targetPoint = null;
+        using (var overlay = new CaptureSelection(selectionMode, fixedSize, false))
+        {
+            if (overlay.ShowDialog() != DialogResult.OK) return null;
+            LastRegion = overlay.SelectedBounds;
+            if (selectionMode == CaptureMode.FullScreen) targetPoint = overlay.SelectedPoint;
+        }
+        DwmFlush();
+        using var scroller = new ScrollingCaptureWindow(LastRegion, false, targetPoint);
+        return scroller.ShowDialog() == DialogResult.OK ? scroller.TakeResult() : null;
+    }
+
+    [DllImport("dwmapi.dll")] private static extern int DwmFlush();
 
     public static Rectangle? SelectScreenBounds()
     {
@@ -111,6 +130,7 @@ internal sealed class CaptureSelection : Form
     private string? selectionHint;
     private readonly Font infoFont = new("Microsoft YaHei UI", 9f);
     public Rectangle SelectedBounds => selection.IsEmpty ? Rectangle.Empty : new(selection.X + desktop.X, selection.Y + desktop.Y, selection.Width, selection.Height);
+    internal Point SelectedPoint => new(current.X + desktop.X, current.Y + desktop.Y);
 
     public CaptureSelection(CaptureMode mode, Size fixedSize, bool includeCursor)
         : this(mode, fixedSize, SystemInformation.VirtualScreen, null, CaptureTargets.Screens(),

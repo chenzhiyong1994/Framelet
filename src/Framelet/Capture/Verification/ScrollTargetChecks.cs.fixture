@@ -1,0 +1,381 @@
+using Framelet;
+using System.Diagnostics;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+
+internal static class ScrollTargetChecks
+{
+    internal static int Run()
+    {
+        int checks = 0;
+        Point originalPointer = Cursor.Position;
+        try
+        {
+            using var fixture = new ScrollFixtureHost();
+            fixture.Activate();
+            Pump(150);
+            Rectangle region = fixture.Region;
+            Point beforePreparation = new(region.Left + 6, region.Top + 6);
+            Cursor.Position = beforePreparation;
+            using (var target = ScrollTarget.FromRegion(region))
+            {
+                Verify(target.Prepare(out string error), "prepare fixture: " + error);
+                Verify(Cursor.Position == target.Position, "prepare positions pointer in the selected region");
+                using var before = CaptureFixtureFrame(region, 8 + fixture.ScrollOffset);
+                int originalOffset = fixture.ScrollOffset;
+                Verify(target.ScrollDown(out error), "send native wheel to fixture: " + error);
+                Pump(250);
+                Verify(fixture.WheelCount > 0, "fixture receives real mouse wheel input");
+                int distance = fixture.ScrollOffset - originalOffset;
+                Verify(distance > 0, "native WinForms scrollable control scrolls downward");
+                using var after = CaptureEngine.CaptureScreen(region);
+                Verify(distance < region.Height, "wheel retains image overlap with default system scroll settings");
+                int overlap = ImageStitcher.FindVerticalOverlap(before, after);
+                string alignmentDetails = string.Empty;
+                if (overlap != region.Height - distance)
+                {
+                    string artifacts = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "scroll-native");
+                    Directory.CreateDirectory(artifacts);
+                    before.Save(Path.Combine(artifacts, "native-before.png"), ImageFormat.Png);
+                    after.Save(Path.Combine(artifacts, "native-after.png"), ImageFormat.Png);
+                    var details = new
+                    {
+                        Region = region,
+                        Surface = fixture.SurfaceBounds,
+                        Screen = SystemInformation.VirtualScreen,
+                        BeforeOffset = originalOffset,
+                        AfterOffset = fixture.ScrollOffset,
+                        Distance = distance,
+                        ExpectedOverlap = region.Height - distance,
+                        ActualOverlap = overlap,
+                        Match = ImageStitcher.Analyze(before, after),
+                        BeforeFirstPixel = before.GetPixel(0, 0).ToArgb(),
+                        AfterFirstPixel = after.GetPixel(0, 0).ToArgb(),
+                        BeforeFirstSourceRow = FindSourceRow(before.GetPixel(0, 0)),
+                        AfterFirstSourceRow = FindSourceRow(after.GetPixel(0, 0)),
+                        ExpectedBeforeFirstSourceRow = 8 + originalOffset,
+                        ExpectedAfterFirstSourceRow = 8 + fixture.ScrollOffset
+                    };
+                    alignmentDetails = System.Text.Json.JsonSerializer.Serialize(details);
+                    File.WriteAllText(Path.Combine(artifacts, "native-alignment.json"), alignmentDetails);
+                }
+                Verify(overlap == region.Height - distance,
+                    "desktop frames align by actual native scroll distance; " + alignmentDetails);
+            }
+            Verify(Cursor.Position == beforePreparation, "dispose restores untouched pointer");
+
+            using (var target = ScrollTarget.FromRegion(region))
+            {
+                Verify(target.Prepare(out string error), "prepare cursor cancellation: " + error);
+                Point movedPointer = new(region.Left - 3, region.Top + 6);
+                Cursor.Position = movedPointer;
+                int wheelCount = fixture.WheelCount;
+                Verify(!target.ScrollDown(out error), "pointer outside selection prevents wheel input");
+                Pump(60);
+                Verify(fixture.WheelCount == wheelCount, "rejected input never reaches target");
+                target.Dispose();
+                Verify(Cursor.Position == movedPointer, "dispose preserves user pointer movement");
+            }
+
+            using (var target = ScrollTarget.FromRegion(region))
+            {
+                Verify(target.Prepare(out string error), "prepare explicit resume: " + error);
+                Cursor.Position = new Point(region.Left - 3, region.Top + 6);
+                Verify(target.Prepare(out error), "explicit prepare resumes the existing target: " + error);
+                Verify(Cursor.Position == target.Position, "resume restores original scroll point");
+                fixture.MoveWindow();
+                Verify(!target.ScrollDown(out error), "moving target stops automatic scroll");
+            }
+
+            region = fixture.Region;
+            using (var other = new ScrollFixtureHost(430))
+            using (var target = ScrollTarget.FromRegion(region))
+            {
+                Verify(target.Prepare(out string error), $"prepare focus cancellation: {error}; target={fixture.WindowHandle}, foreground={NativeCapture.GetForegroundWindow()}");
+                other.Activate();
+                Pump(80);
+                int wheelCount = fixture.WheelCount;
+                Verify(!target.ScrollDown(out error), "another foreground window stops automatic scroll");
+                Pump(60);
+                Verify(fixture.WheelCount == wheelCount && other.WheelCount == 0,
+                    "focus change sends no input to either window");
+            }
+
+            fixture.Activate();
+            Pump(80);
+            region = fixture.Region;
+            Point selectedPoint = new(region.Left + 17, region.Top + 19);
+            using (var target = ScrollTarget.FromRegion(Screen.FromRectangle(region).Bounds, selectedPoint))
+            {
+                Verify(target.Position == selectedPoint, "full screen selection keeps its clicked target point");
+                Verify(target.Prepare(out string error), "prepare clicked screen target: " + error);
+                fixture.CloseWindow();
+                Verify(!target.ScrollDown(out error), "closed target stops automatic scroll");
+            }
+            VerifyController(false, Verify);
+            VerifyController(true, Verify);
+            return checks;
+        }
+        finally
+        {
+            Cursor.Position = originalPointer;
+        }
+
+        void Verify(bool condition, string name)
+        {
+            if (!condition) throw new InvalidOperationException("Scroll target check failed: " + name);
+            checks++;
+        }
+    }
+
+    private static void VerifyController(bool entireScreen, Action<bool, string> verify)
+    {
+        using var fixture = new ScrollFixtureHost(contentHeight: 620, coverScreen: entireScreen);
+        fixture.Activate();
+        Pump(150);
+        Rectangle contentRegion = fixture.Region;
+        Rectangle captureRegion = entireScreen ? Screen.FromRectangle(contentRegion).Bounds : contentRegion;
+        Point? targetPoint = entireScreen ? new Point(contentRegion.Left + 17, contentRegion.Top + 19) : null;
+        int initialOffset = fixture.ScrollOffset;
+        using var controller = new ScrollingCaptureWindow(captureRegion, false, targetPoint);
+        using var watchdog = new System.Windows.Forms.Timer { Interval = 100 };
+        var elapsed = new Stopwatch();
+        bool observedRunning = false;
+        string? stoppedBecause = null;
+        string scenario = entireScreen ? "full monitor controller" : "selected region controller";
+        watchdog.Tick += (_, _) =>
+        {
+            observedRunning |= controller.IsRunning;
+            if (elapsed.Elapsed > TimeSpan.FromSeconds(entireScreen ? 30 : 15))
+                stoppedBecause = "watchdog expired: " + controller.StatusText;
+            else if (observedRunning && !controller.IsRunning && controller.DialogResult != DialogResult.OK)
+                stoppedBecause = "capture paused: " + controller.StatusText;
+            if (stoppedBecause == null) return;
+            watchdog.Stop();
+            controller.DialogResult = DialogResult.Cancel;
+            controller.Close();
+        };
+        controller.Shown += (_, _) => { elapsed.Start(); watchdog.Start(); };
+        DialogResult outcome = controller.ShowDialog();
+        watchdog.Stop();
+        verify(outcome == DialogResult.OK, scenario + " finishes automatically; " + stoppedBecause);
+        verify(controller.AcceptedFrames > 1, scenario + " accepts multiple real desktop frames");
+        verify(fixture.ScrollOffset == fixture.MaximumScrollOffset, scenario + " reaches the native scroll bottom");
+        using var result = controller.TakeResult();
+        verify(result != null, scenario + " produces an owned image");
+        if (result == null) return;
+        int distance = fixture.ScrollOffset - initialOffset;
+        verify(result.Width == captureRegion.Width && result.Height == captureRegion.Height + distance,
+            scenario + " result dimensions include exactly the real scroll distance");
+        Rectangle pixels = entireScreen
+            ? new Rectangle(contentRegion.Left - captureRegion.Left, fixture.SurfaceBounds.Top - captureRegion.Top,
+                contentRegion.Width, fixture.SurfaceBounds.Height + distance)
+            : new Rectangle(Point.Empty, result.Size);
+        int firstSourceRow = initialOffset + (entireScreen ? 0 : 8);
+        verify(MatchesDocumentRows(result, pixels, firstSourceRow), scenario + " preserves every captured content pixel");
+        string artifacts = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "scroll-native");
+        Directory.CreateDirectory(artifacts);
+        result.Save(Path.Combine(artifacts, entireScreen ? "controller-screen.png" : "controller-region.png"), ImageFormat.Png);
+        controller.Dispose();
+        VerifyReleasedHotkeys(verify, scenario);
+    }
+
+    private static void VerifyReleasedHotkeys(Action<bool, string> verify, string scenario)
+    {
+        Keys[] shortcuts = [Keys.F8, Keys.F9, Keys.Escape];
+        foreach (var shortcut in shortcuts)
+        {
+            int identifier = 3800 + (int)shortcut;
+            bool registered = RegisterHotKey(IntPtr.Zero, identifier, 0x4000, (uint)shortcut);
+            try { verify(registered, scenario + " releases " + shortcut + " after completion"); }
+            finally { if (registered) UnregisterHotKey(IntPtr.Zero, identifier); }
+        }
+    }
+
+    private static bool MatchesDocumentRows(Bitmap bitmap, Rectangle bounds, int firstSourceRow)
+    {
+        var locked = bitmap.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var pixels = new int[bounds.Width];
+            for (int row = 0; row < bounds.Height; row++)
+            {
+                Marshal.Copy(IntPtr.Add(locked.Scan0, row * locked.Stride), pixels, 0, pixels.Length);
+                int expected = DocumentColor(firstSourceRow + row).ToArgb();
+                if (pixels.Any(pixel => pixel != expected)) return false;
+            }
+            return true;
+        }
+        finally { bitmap.UnlockBits(locked); }
+    }
+
+    private static Bitmap CaptureFixtureFrame(Rectangle region, int firstSourceRow)
+    {
+        var elapsed = Stopwatch.StartNew();
+        Bitmap? previous = null;
+        bool previousMatches = false;
+        try
+        {
+            while (elapsed.Elapsed < TimeSpan.FromSeconds(2))
+            {
+                Pump(80);
+                var current = CaptureEngine.CaptureScreen(region);
+                bool matches = MatchesDocumentRows(current, new Rectangle(Point.Empty, current.Size), firstSourceRow);
+                if (matches && previousMatches && previous != null && ImageStitcher.AreEquivalent(previous, current))
+                    return current;
+                previous?.Dispose();
+                previous = current;
+                previousMatches = matches;
+            }
+            string artifacts = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "scroll-native");
+            Directory.CreateDirectory(artifacts);
+            previous?.Save(Path.Combine(artifacts, "native-baseline-timeout.png"), ImageFormat.Png);
+            throw new InvalidOperationException($"Fixture pixels did not settle to source row {firstSourceRow} within two seconds.");
+        }
+        finally { previous?.Dispose(); }
+    }
+
+    private static Color DocumentColor(int sourceRow)
+        => Color.FromArgb((sourceRow * 37) % 251, (sourceRow * 61) % 253, (sourceRow * 17) % 241);
+
+    private static int FindSourceRow(Color color)
+    {
+        for (int row = 0; row < 1800; row++)
+            if (DocumentColor(row).ToArgb() == color.ToArgb()) return row;
+        return -1;
+    }
+
+    private static void Pump(int milliseconds)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (elapsed.ElapsedMilliseconds < milliseconds)
+        {
+            Application.DoEvents();
+            Thread.Sleep(10);
+        }
+    }
+
+    private sealed class ScrollFixtureHost : IDisposable
+    {
+        private readonly ManualResetEventSlim ready = new();
+        private readonly Thread thread;
+        private ScrollFixtureWindow? window;
+        private Exception? startupError;
+        private bool closed;
+
+        internal ScrollFixtureHost(int horizontalOffset = 0, int contentHeight = 1800, bool coverScreen = false)
+        {
+            thread = new Thread(() =>
+            {
+                try
+                {
+                    using var backdrop = coverScreen ? new Form
+                    {
+                        FormBorderStyle = FormBorderStyle.None,
+                        StartPosition = FormStartPosition.Manual,
+                        Bounds = Screen.PrimaryScreen!.Bounds,
+                        BackColor = Color.FromArgb(31, 42, 54),
+                        TopMost = true,
+                        ShowInTaskbar = false
+                    } : null;
+                    backdrop?.Show();
+                    using var form = new ScrollFixtureWindow(horizontalOffset, contentHeight);
+                    if (backdrop != null) form.Owner = backdrop;
+                    window = form;
+                    form.Shown += (_, _) => ready.Set();
+                    Application.Run(form);
+                }
+                catch (Exception error)
+                {
+                    startupError = error;
+                    ready.Set();
+                }
+            }) { IsBackground = true, Name = "Framelet scroll verification target" };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            if (!ready.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("Scroll fixture did not open.");
+            if (startupError != null) throw new InvalidOperationException("Scroll fixture failed to open.", startupError);
+        }
+
+        internal Rectangle Region => OnUi(() => window!.Surface.RectangleToScreen(new Rectangle(8, 8, 280, 200)));
+        internal IntPtr WindowHandle => OnUi(() => window!.Handle);
+        internal Rectangle SurfaceBounds => OnUi(() => window!.Surface.RectangleToScreen(window.Surface.ClientRectangle));
+        internal int WheelCount => OnUi(() => window!.Surface.WheelCount);
+        internal int ScrollOffset => OnUi(() => -window!.Surface.AutoScrollPosition.Y);
+        internal int MaximumScrollOffset => OnUi(() => window!.Surface.VerticalScroll.Maximum - window.Surface.VerticalScroll.LargeChange + 1);
+        internal void Activate() => OnUi(() => { window!.Activate(); window.Surface.Focus(); });
+        internal void MoveWindow() => OnUi(() => window!.Left += 12);
+
+        internal void CloseWindow()
+        {
+            if (closed) return;
+            OnUi(() => window!.Close());
+            closed = true;
+            thread.Join(3000);
+        }
+
+        private T OnUi<T>(Func<T> callback) => (T)window!.Invoke(callback)!;
+        private void OnUi(Action callback) => window!.Invoke(callback);
+
+        public void Dispose()
+        {
+            CloseWindow();
+            ready.Dispose();
+        }
+    }
+
+    private sealed class ScrollFixtureWindow : Form
+    {
+        internal ScrollFixtureSurface Surface { get; } = new() { Dock = DockStyle.Fill };
+
+        internal ScrollFixtureWindow(int horizontalOffset, int contentHeight)
+        {
+            Text = "Framelet scrolling verification";
+            StartPosition = FormStartPosition.Manual;
+            ClientSize = new Size(360, 260);
+            var area = Screen.PrimaryScreen!.WorkingArea;
+            Location = new Point(area.Left + 24 + horizontalOffset, area.Top + 48);
+            TopMost = true;
+            Surface.AutoScrollMinSize = new Size(0, contentHeight);
+            Controls.Add(Surface);
+        }
+    }
+
+    private sealed class ScrollFixtureSurface : ScrollableControl
+    {
+        internal int WheelCount { get; private set; }
+
+        internal ScrollFixtureSurface()
+        {
+            SetStyle(ControlStyles.Selectable | ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer, true);
+            AutoScroll = true;
+            AutoScrollMinSize = new Size(0, 1800);
+            VerticalScroll.SmallChange = 16;
+            TabStop = true;
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs eventArgs)
+        {
+            WheelCount++;
+            base.OnMouseWheel(eventArgs);
+            Invalidate();
+            Update();
+        }
+
+        protected override void OnPaint(PaintEventArgs eventArgs)
+        {
+            for (int row = 0; row < ClientSize.Height; row++)
+            {
+                int sourceRow = row - AutoScrollPosition.Y;
+                using var pen = new Pen(DocumentColor(sourceRow));
+                eventArgs.Graphics.DrawLine(pen, 0, row, ClientSize.Width, row);
+            }
+        }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RegisterHotKey(IntPtr window, int identifier, uint modifiers, uint key);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnregisterHotKey(IntPtr window, int identifier);
+}
