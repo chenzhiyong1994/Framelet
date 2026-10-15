@@ -39,7 +39,7 @@ internal sealed class DrawForm : Form
         Controls.Add(layout);
         var palette = new TableLayoutPanel { Name = "DrawingTools", Dock = DockStyle.Fill, AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 10,
-            Margin = Padding.Empty, Padding = new Padding(3), BackColor = BrandTheme.Surface };
+            Margin = Padding.Empty, Padding = new Padding(3), BackColor = BrandTheme.Surface, AutoScroll = true };
         palette.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         palette.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         for (int row = 0; row < 9; row++) palette.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -76,6 +76,7 @@ internal sealed class DrawForm : Form
         tooltip.SetToolTip(zoomIn, "放大图像"); tooltip.SetToolTip(zoomOut, "缩小图像");
         palette.Controls.Add(zoomIn, 0, 7); palette.Controls.Add(actual, 1, 7);
         palette.Controls.Add(zoomOut, 0, 8); palette.Controls.Add(fit, 1, 8);
+        palette.Layout += (_, _) => FitPaletteButtons(palette, divider);
 
         var bottom = new TableLayoutPanel { Name = "DrawingFooter", Dock = DockStyle.Fill, AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = BrandTheme.Surface,
@@ -133,6 +134,32 @@ internal sealed class DrawForm : Form
         SetTool(AnnotationTool.Arrow);
         Shown += (_, _) => canvas.Focus();
         ResumeLayout(true);
+    }
+
+    private static void FitPaletteButtons(TableLayoutPanel palette, Control divider)
+    {
+        if (palette.ClientSize.Height <= 0) return;
+        var buttons = palette.Controls.OfType<Button>().ToArray();
+        int rows = buttons.Select(palette.GetRow).Distinct().Count();
+        if (rows == 0) return;
+        int fixedHeight = palette.Padding.Vertical + divider.Height + divider.Margin.Vertical;
+        int MinimumHeight(Button button) => Math.Max((int)Math.Ceiling(button.Width * .75), (button.Image?.Height ?? 0) + 4);
+        var minimumContent = new Size(0, fixedHeight + buttons.GroupBy(palette.GetRow)
+            .Sum(row => row.Max(button => MinimumHeight(button) + button.Margin.Vertical)));
+        int contentWidth = palette.Padding.Horizontal + buttons.GroupBy(palette.GetColumn)
+            .Sum(column => column.Max(button => button.Width + button.Margin.Horizontal));
+        int scrollWidth = minimumContent.Height > palette.ClientSize.Height
+            ? SystemInformation.GetVerticalScrollBarWidthForDpi(palette.DeviceDpi) : 0;
+        var minimumSize = new Size(contentWidth + scrollWidth, 0);
+        if (palette.MinimumSize != minimumSize) palette.MinimumSize = minimumSize;
+        if (palette.AutoScrollMinSize != minimumContent) palette.AutoScrollMinSize = minimumContent;
+        int rowHeight = Math.Max(0, (palette.ClientSize.Height - fixedHeight) / rows);
+        foreach (var button in buttons)
+        {
+            int minimum = MinimumHeight(button);
+            int height = Math.Max(minimum, Math.Min(button.Width, rowHeight - button.Margin.Vertical));
+            if (button.Height != height) button.Height = height;
+        }
     }
 
     private Button SmallButton(string iconName, string name, Action action)

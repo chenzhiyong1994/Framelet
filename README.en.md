@@ -33,6 +33,7 @@ Capture the part you need, mark what matters, or record a short walkthrough. Fra
 - **Fix capture exiting at startup.** The control window stays alive during capture. It is excluded from screenshots or made temporarily transparent, instead of hiding the modal window and ending capture before the first frame.
 - **Reduce false stops and incorrect matches.** Thin hover borders no longer prevent otherwise matching text from aligning. Local text checks detect differences within repeated layouts; frames without a reliable match are not appended.
 - **Pause or finish when needed.** Use `F8` to pause or resume, `F9` to finish the captured portion, and `Esc` to cancel. Automatic scrolling stops if the target changes, becomes obstructed, or moves.
+- **Keep annotation tools reachable in small windows.** At higher scales, tool buttons adapt to the available height and scroll vertically when space is insufficient.
 
 Validation includes replaying real browser screenshots and capturing native Windows controls with actual mouse-wheel input. Browser replay is not an end-to-end browser wheel test, and does not establish compatibility with every application. [Validation scope (中文) →](docs/validation.md)
 

@@ -69,6 +69,53 @@ public static class EditorSelfTests
             AssertDrawingStructure(draw, draw.DeviceDpi / 96f);
             AssertRecorderStructure(recorder);
         });
+        Check("annotation icons fit a constrained 1024 by 768 window at 100, 150 and 200 percent simulated layout scales", () =>
+        {
+            using var image = new Bitmap(80, 60);
+            foreach (float scale in new[] { 1f, 1.5f, 2f })
+            {
+                using var draw = new DrawForm(image) { MaximumSize = new Size(1024, 768) };
+                ScaleLayout(draw, scale);
+                draw.MaximumSize = new Size(1024, 768);
+                draw.Size = draw.MaximumSize;
+                LayoutTree(draw);
+                AssertDrawingStructure(draw, scale);
+            }
+        });
+        Check("hidden non-top-level annotation layout scrolls every icon into a short viewport and restores square targets after expansion", () =>
+        {
+            using var image = new Bitmap(80, 60);
+            using var draw = new DrawForm(image) { TopLevel = false, MaximumSize = new Size(1024, 768) };
+            ScaleLayout(draw, 2);
+            draw.MaximumSize = new Size(1024, 600);
+            draw.Size = draw.MaximumSize;
+            _ = draw.Handle;
+            foreach (var control in Descendants(draw).ToArray()) _ = control.Handle;
+            LayoutTree(draw);
+            Assert(!draw.Visible, "simulated constrained layout must not show a window or change the monitor DPI");
+            var palette = draw.Controls.Find("DrawingTools", true).OfType<TableLayoutPanel>().Single();
+            Assert(palette.AutoScroll && palette.VerticalScroll.Visible,
+                $"short annotation viewport must scroll without shrinking hit targets below 24 DIP; window {draw.ClientSize}, viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}");
+            Assert(!palette.HorizontalScroll.Visible,
+                $"short annotation viewport must retain both complete icon columns without horizontal scrolling; viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}, window {draw.ClientSize}");
+            foreach (var button in palette.Controls.OfType<Button>())
+            {
+                palette.ScrollControlIntoView(button);
+                Assert(palette.ClientRectangle.Contains(button.Bounds),
+                    $"scrolling must reveal the complete {button.AccessibleName} icon {button.Bounds} inside viewport {palette.ClientRectangle}; scroll {palette.AutoScrollPosition}, window {draw.ClientSize}");
+                Assert(button.Height >= Math.Ceiling(button.Width * .75) && button.ClientSize.Height >= button.Image!.Height,
+                    $"{button.AccessibleName} icon {button.Bounds} must retain its complete image and at least a 24-DIP hit target in viewport {palette.ClientRectangle}");
+            }
+            draw.MaximumSize = new Size(1920, 1080);
+            draw.Size = draw.MaximumSize;
+            LayoutTree(draw);
+            Assert(!palette.VerticalScroll.Visible,
+                $"expanded annotation viewport must no longer need vertical scrolling; viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}, window {draw.ClientSize}");
+            AssertDrawingStructure(draw, 2);
+            foreach (var button in palette.Controls.OfType<Button>())
+                Assert(button.Height == button.Width,
+                    $"expanding the simulated viewport must restore square {button.AccessibleName} icon {button.Bounds}; viewport {palette.ClientRectangle}, window {draw.ClientSize}");
+        });
         Check("recording controls keep stable native-handle layouts across 100 pause and resume cycles", () =>
         {
             var recordingBounds = new Rectangle(100, 100, 640, 360);
@@ -665,8 +712,11 @@ public static class EditorSelfTests
         {
             Assert(button.Text.Length == 0 && button.Image is not null && !string.IsNullOrWhiteSpace(button.AccessibleName),
                 "narrow annotation buttons must use named icons instead of truncated labels");
+            Assert(button.Height >= Math.Ceiling(button.Width * .75) && button.ClientSize.Height >= button.Image!.Height,
+                $"{button.AccessibleName} icon {button.Bounds} must retain its complete image and at least a 24-DIP hit target in viewport {palette.ClientRectangle}");
             Assert(!string.IsNullOrWhiteSpace(toolTip.GetToolTip(button)), "every annotation icon must have a discoverable tooltip");
-            Assert(palette.ClientRectangle.Contains(button.Bounds), "annotation icon must remain fully inside the palette");
+            Assert(palette.ClientRectangle.Contains(button.Bounds),
+                $"annotation icon {button.AccessibleName} {button.Bounds} must remain fully inside palette {palette.ClientRectangle}; window {draw.ClientSize}, scale {scale:P0}, font {draw.Font.Name}, DPI {draw.DeviceDpi}");
         }
         foreach (var tool in new[] { AnnotationTool.Select, AnnotationTool.Arrow, AnnotationTool.Text, AnnotationTool.Number,
             AnnotationTool.Pen, AnnotationTool.Line, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Highlight, AnnotationTool.Mosaic })
