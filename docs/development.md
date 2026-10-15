@@ -23,7 +23,7 @@ python -m http.server 8768 --bind 127.0.0.1 --directory docs
 ./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish
 
 # 已有发布文件时，选择新的空目录
-./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.6.0
+./scripts/build.ps1 -DotnetPath '<SDK>/dotnet.exe' -Publish -PublishDirectory dist/Framelet-0.6.1
 
 # 图像、配置、格式、原生 MP4 编码和捕捉/拼接检查
 ./scripts/test.ps1 -DotnetPath '<SDK>/dotnet.exe'

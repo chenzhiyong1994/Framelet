@@ -27,16 +27,18 @@ Capture the part you need, mark what matters, or record a short walkthrough. Fra
 
 **Unzip and run. Silent recording needs no setup.** The portable package includes the .NET runtime and uses Windows media services to create H.264 MP4 files. Audio capture and video trimming are optional extensions that require FFmpeg.
 
-## New in v0.6.0
+## v0.6.1: scrolling capture fixes
 
-- **Choose the right target.** Point to a full window or individual monitor. Screen recording also supports monitor selection. Use `Tab` to switch monitors and `Esc` to cancel.
-- **Crop from any edge.** Drag an edge or corner, preview the retained area, and release to crop. Press `Ctrl+Z` to undo.
-- **See what is recording.** A red boundary indicates recording; yellow indicates pause. The label also shows the state and capture dimensions.
-- **Leave without saving.** Finish or close the recorder to choose Save, Discard, or Return. Unwanted recordings can be discarded without choosing a file location.
+- **Capture downward automatically.** Select a content region, or click the content to scroll on a selected screen. Framelet scrolls, waits for stable frames, stitches them, and finishes at the bottom.
+- **Fix capture exiting at startup.** The control window stays alive during capture. It is excluded from screenshots or made temporarily transparent, instead of hiding the modal window and ending capture before the first frame.
+- **Reduce false stops and incorrect matches.** Thin hover borders no longer prevent otherwise matching text from aligning. Local text checks detect differences within repeated layouts; frames without a reliable match are not appended.
+- **Pause or finish when needed.** Use `F8` to pause or resume, `F9` to finish the captured portion, and `Esc` to cancel. Automatic scrolling stops if the target changes, becomes obstructed, or moves.
+
+Validation includes replaying real browser screenshots and capturing native Windows controls with actual mouse-wheel input. Browser replay is not an end-to-end browser wheel test, and does not establish compatibility with every application. [Validation scope (中文) →](docs/validation.md)
 
 ## Get started
 
-1. Download `Framelet-v0.6.0-win-x64.zip` from [Releases](https://github.com/chenzhiyong1994/Framelet/releases/latest).
+1. Download `Framelet-v0.6.1-win-x64.zip` from [Releases](https://github.com/chenzhiyong1994/Framelet/releases/latest).
 2. Extract it to a local folder and open `Framelet.exe`. No installer needed.
 3. Press `Ctrl+PrtSc` to select a region, or use the recording icon on the toolbar.
 

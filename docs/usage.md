@@ -2,7 +2,7 @@
 
 [返回首页](../README.md) · [完整功能与边界](features.md) · [配置与诊断](development.md#配置与诊断)
 
-本指南适用于 Framelet 0.6.0。默认将截图存入图片目录的 Framelet 文件夹。
+本指南适用于 Framelet 0.6.1。默认将截图存入图片目录的 Framelet 文件夹。
 
 ## 直接运行
 
