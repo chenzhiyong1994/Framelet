@@ -82,39 +82,51 @@ public static class EditorSelfTests
                 AssertDrawingStructure(draw, scale);
             }
         });
-        Check("hidden non-top-level annotation layout scrolls every icon into a short viewport and restores square targets after expansion", () =>
+        Check("hidden panel-hosted annotation layout scrolls every icon into a short viewport and restores square targets after expansion", () =>
         {
             using var image = new Bitmap(80, 60);
-            using var draw = new DrawForm(image) { TopLevel = false, MaximumSize = new Size(1024, 768) };
+            using var draw = new DrawForm(image);
             ScaleLayout(draw, 2);
-            draw.MaximumSize = new Size(1024, 600);
-            draw.Size = draw.MaximumSize;
-            _ = draw.Handle;
-            foreach (var control in Descendants(draw).ToArray()) _ = control.Handle;
-            LayoutTree(draw);
-            Assert(!draw.Visible, "simulated constrained layout must not show a window or change the monitor DPI");
-            var palette = draw.Controls.Find("DrawingTools", true).OfType<TableLayoutPanel>().Single();
-            Assert(palette.AutoScroll && palette.VerticalScroll.Visible,
-                $"short annotation viewport must scroll without shrinking hit targets below 24 DIP; window {draw.ClientSize}, viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}");
-            Assert(!palette.HorizontalScroll.Visible,
-                $"short annotation viewport must retain both complete icon columns without horizontal scrolling; viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}, window {draw.ClientSize}");
-            foreach (var button in palette.Controls.OfType<Button>())
+            var layout = draw.Controls.Find("DrawingLayout", true).Single();
+            using var host = new Panel { Visible = false, ClientSize = new Size(1008, 561), Font = draw.Font };
+            try
             {
-                palette.ScrollControlIntoView(button);
-                Assert(palette.ClientRectangle.Contains(button.Bounds),
-                    $"scrolling must reveal the complete {button.AccessibleName} icon {button.Bounds} inside viewport {palette.ClientRectangle}; scroll {palette.AutoScrollPosition}, window {draw.ClientSize}");
-                Assert(button.Height >= Math.Ceiling(button.Width * .75) && button.ClientSize.Height >= button.Image!.Height,
-                    $"{button.AccessibleName} icon {button.Bounds} must retain its complete image and at least a 24-DIP hit target in viewport {palette.ClientRectangle}");
+                draw.Controls.Add(host);
+                draw.Controls.Remove(layout);
+                host.Controls.Add(layout);
+                _ = draw.Handle;
+                _ = host.Handle;
+                foreach (var control in Descendants(host).ToArray()) _ = control.Handle;
+                host.ClientSize = new Size(1008, 561);
+                LayoutTree(host);
+                Assert(!draw.Visible && !host.Visible, "simulated constrained layout must not show a window or change the monitor DPI");
+                Assert(host.Size == new Size(1008, 561) && host.ClientSize == new Size(1008, 561),
+                    $"short simulated host must keep its requested geometry; size {host.Size}, client {host.ClientSize}");
+                var palette = host.Controls.Find("DrawingTools", true).OfType<TableLayoutPanel>().Single();
+                Assert(palette.AutoScroll && palette.VerticalScroll.Visible,
+                    $"short annotation viewport must scroll without shrinking hit targets below 24 DIP; host {host.ClientSize}, viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}");
+                Assert(!palette.HorizontalScroll.Visible,
+                    $"short annotation viewport must retain both complete icon columns without horizontal scrolling; viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}, host {host.ClientSize}");
+                foreach (var button in palette.Controls.OfType<Button>())
+                {
+                    palette.ScrollControlIntoView(button);
+                    Assert(palette.ClientRectangle.Contains(button.Bounds),
+                        $"scrolling must reveal the complete {button.AccessibleName} icon {button.Bounds} inside viewport {palette.ClientRectangle}; scroll {palette.AutoScrollPosition}, host {host.ClientSize}");
+                    Assert(button.Height >= Math.Ceiling(button.Width * .75) && button.ClientSize.Height >= button.Image!.Height,
+                        $"{button.AccessibleName} icon {button.Bounds} must retain its complete image and at least a 24-DIP hit target in viewport {palette.ClientRectangle}");
+                }
+                host.ClientSize = new Size(1904, 1041);
+                LayoutTree(host);
+                Assert(host.Size == new Size(1904, 1041) && host.ClientSize == new Size(1904, 1041),
+                    $"expanded simulated host must keep its requested geometry; size {host.Size}, client {host.ClientSize}");
+                Assert(!palette.VerticalScroll.Visible,
+                    $"expanded annotation viewport must no longer need vertical scrolling; viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}, host {host.ClientSize}");
+                AssertDrawingStructure(draw, 2, host);
+                foreach (var button in palette.Controls.OfType<Button>())
+                    Assert(button.Height == button.Width,
+                        $"expanding the simulated viewport must restore square {button.AccessibleName} icon {button.Bounds}; viewport {palette.ClientRectangle}, host {host.ClientSize}");
             }
-            draw.MaximumSize = new Size(1920, 1080);
-            draw.Size = draw.MaximumSize;
-            LayoutTree(draw);
-            Assert(!palette.VerticalScroll.Visible,
-                $"expanded annotation viewport must no longer need vertical scrolling; viewport {palette.ClientRectangle}, display {palette.DisplayRectangle}, window {draw.ClientSize}");
-            AssertDrawingStructure(draw, 2);
-            foreach (var button in palette.Controls.OfType<Button>())
-                Assert(button.Height == button.Width,
-                    $"expanding the simulated viewport must restore square {button.AccessibleName} icon {button.Bounds}; viewport {palette.ClientRectangle}, window {draw.ClientSize}");
+            finally { draw.Controls.Add(layout); }
         });
         Check("recording controls keep stable native-handle layouts across 100 pause and resume cycles", () =>
         {
@@ -692,17 +704,18 @@ public static class EditorSelfTests
             "the selected document canvas must remain inside the workspace below the toolbar");
     }
 
-    private static void AssertDrawingStructure(DrawForm draw, float scale)
+    private static void AssertDrawingStructure(DrawForm draw, float scale, Control? viewportRoot = null)
     {
-        Assert(draw.Controls.Find("FrameletHeader", true).Length == 0, "drawing must not restore a large branding header");
-        var palette = draw.Controls.Find("DrawingTools", true).OfType<TableLayoutPanel>().Single();
-        var canvas = Descendants(draw).OfType<ImageCanvas>().Single();
-        var footer = draw.Controls.Find("DrawingFooter", true).Single();
-        var paletteBounds = BoundsWithin(palette, draw);
-        var canvasBounds = BoundsWithin(canvas, draw);
-        var footerBounds = BoundsWithin(footer, draw);
+        var root = viewportRoot ?? draw;
+        Assert(root.Controls.Find("FrameletHeader", true).Length == 0, "drawing must not restore a large branding header");
+        var palette = root.Controls.Find("DrawingTools", true).OfType<TableLayoutPanel>().Single();
+        var canvas = Descendants(root).OfType<ImageCanvas>().Single();
+        var footer = root.Controls.Find("DrawingFooter", true).Single();
+        var paletteBounds = BoundsWithin(palette, root);
+        var canvasBounds = BoundsWithin(canvas, root);
+        var footerBounds = BoundsWithin(footer, root);
         Assert(palette.ColumnCount == 2 && palette.Width <= Math.Ceiling(96 * scale), "annotation tools must occupy a narrow two-column palette");
-        Assert(draw.ClientRectangle.Contains(paletteBounds) && draw.ClientRectangle.Contains(canvasBounds) && draw.ClientRectangle.Contains(footerBounds),
+        Assert(root.ClientRectangle.Contains(paletteBounds) && root.ClientRectangle.Contains(canvasBounds) && root.ClientRectangle.Contains(footerBounds),
             "drawing palette, canvas and footer must stay inside the window");
         Assert(paletteBounds.Right <= canvasBounds.Left && paletteBounds.Bottom <= footerBounds.Top && canvasBounds.Bottom <= footerBounds.Top,
             "annotation tools, canvas and options must not cover one another");
@@ -716,7 +729,7 @@ public static class EditorSelfTests
                 $"{button.AccessibleName} icon {button.Bounds} must retain its complete image and at least a 24-DIP hit target in viewport {palette.ClientRectangle}");
             Assert(!string.IsNullOrWhiteSpace(toolTip.GetToolTip(button)), "every annotation icon must have a discoverable tooltip");
             Assert(palette.ClientRectangle.Contains(button.Bounds),
-                $"annotation icon {button.AccessibleName} {button.Bounds} must remain fully inside palette {palette.ClientRectangle}; window {draw.ClientSize}, scale {scale:P0}, font {draw.Font.Name}, DPI {draw.DeviceDpi}");
+                $"annotation icon {button.AccessibleName} {button.Bounds} must remain fully inside palette {palette.ClientRectangle}; root {root.ClientSize}, scale {scale:P0}, font {root.Font.Name}, DPI {root.DeviceDpi}");
         }
         foreach (var tool in new[] { AnnotationTool.Select, AnnotationTool.Arrow, AnnotationTool.Text, AnnotationTool.Number,
             AnnotationTool.Pen, AnnotationTool.Line, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Highlight, AnnotationTool.Mosaic })

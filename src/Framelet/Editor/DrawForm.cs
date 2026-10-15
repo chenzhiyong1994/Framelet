@@ -146,8 +146,15 @@ internal sealed class DrawForm : Form
         int MinimumHeight(Button button) => Math.Max((int)Math.Ceiling(button.Width * .75), (button.Image?.Height ?? 0) + 4);
         var minimumContent = new Size(0, fixedHeight + buttons.GroupBy(palette.GetRow)
             .Sum(row => row.Max(button => MinimumHeight(button) + button.Margin.Vertical)));
-        int contentWidth = palette.Padding.Horizontal + buttons.GroupBy(palette.GetColumn)
-            .Sum(column => column.Max(button => button.Width + button.Margin.Horizontal));
+        int contentWidth = palette.Padding.Horizontal;
+        foreach (var column in buttons.GroupBy(palette.GetColumn))
+        {
+            int width = column.Max(button => button.Width + button.Margin.Horizontal);
+            var style = palette.ColumnStyles[column.Key];
+            if (style.SizeType != SizeType.Absolute) style.SizeType = SizeType.Absolute;
+            if (style.Width != width) style.Width = width;
+            contentWidth += width;
+        }
         int scrollWidth = minimumContent.Height > palette.ClientSize.Height
             ? SystemInformation.GetVerticalScrollBarWidthForDpi(palette.DeviceDpi) : 0;
         var minimumSize = new Size(contentWidth + scrollWidth, 0);
@@ -204,7 +211,8 @@ internal sealed class DrawForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { tooltip.Dispose(); canvas.Document = null; document.Dispose(); foreach (var icon in icons) icon.Dispose(); }
+        if (disposing) { tooltip.Dispose(); canvas.Document = null; document.Dispose(); }
         base.Dispose(disposing);
+        if (disposing) foreach (var icon in icons) icon.Dispose();
     }
 }
